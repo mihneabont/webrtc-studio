@@ -56,7 +56,7 @@ app.setupRelay();
 // UI can offer it (OBS/WHIP ingest needs it). Nothing is enabled automatically.
 // Otherwise look for one running on this computer (installed from the OBS
 // source card), so the page can be hosted anywhere.
-const HELPER_PORTS = [8787, 8788];
+const HELPER_PORTS = [8788, 8787];
 app.detectHelper = async () => {
   const bases = [new URL('.', location.href).href.replace(/\/$/, ''), ...HELPER_PORTS.map((p) => `http://localhost:${p}`)];
   for (const base of bases) {
@@ -65,6 +65,7 @@ app.detectHelper = async () => {
       const info = r.ok ? await r.json() : null;
       if (info?.app === 'webrtc-studio-helper') {
         app.helperOrigin = base === bases[0] ? location.origin : base;
+        app.helperInfo = info;
         app.ui.emit('settings');
         return app.helperOrigin;
       }
