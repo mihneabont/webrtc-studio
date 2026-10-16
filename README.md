@@ -4,7 +4,7 @@ A browser-only live production studio. It receives remote WebRTC camera feeds,
 shows them in a multiview, lets an operator build and switch a programme with
 transitions, graphics and an audio mix, and publishes that programme as a real
 outgoing WebRTC stream: to browser receivers, to any WHIP ingest server, or to
-Twitch's WebRTC ingest.
+Twitch's WebRTC ingest. With the optional helper it can also send to RTMP.
 
 All media work (decoding, compositing, mixing, encoding) happens in the
 operator's browser. The app is a set of static files: no build step, no
@@ -24,10 +24,15 @@ link. OBS on the studio computer can also join through OBS Virtual Camera.
 To send from OBS or Larix directly (WHIP), the studio needs the small optional
 helper running on the studio computer. Add an "OBS / WHIP encoder" source and
 click **Install helper (Windows)**: the downloaded setup file installs Node.js
-if needed, runs the helper in the background on port 8788 (and at every
-sign-in), and adds local-network firewall rules after one admin prompt. Run it
-with `/uninstall` to remove it. On macOS or Linux:
-`node signaling-server/server.mjs --port 8788`.
+and ffmpeg if needed, runs the helper in the background on port 8788 (and at
+every sign-in), and adds local-network firewall rules after one admin prompt.
+Run it with `/uninstall` to remove the helper (ffmpeg stays installed). On
+macOS or Linux: `node signaling-server/server.mjs --port 8788`.
+
+The same helper sends the programme to **RTMP** servers (YouTube, Twitch,
+Facebook…): add a **+ RTMP** output, paste the server URL and stream key, and
+start it. A browser can't send RTMP by itself, so this output records the
+programme and the helper's ffmpeg pushes it on. See docs/LIMITATIONS.md.
 
 Locally, without hosting: `node signaling-server/server.mjs --static . --port 8787`
 serves the app and the helper together.
@@ -116,11 +121,11 @@ you reconnect them.
 | `js/compositor.js` | Programme/Preview rendering, transitions, scene layers, graphics |
 | `js/switcher.js` | Preview/Programme bus, Cut/Auto/T-bar/FTB, graphics keys |
 | `js/audio.js` | Web Audio mixer |
-| `js/outputs.js` | Programme outputs: receivers, WHIP, Twitch |
+| `js/outputs.js` | Programme outputs: receivers, WHIP, Twitch, RTMP (via the helper) |
 | `js/rtc.js` | ICE config, gathering, codec preferences, stats, WHIP/WHEP client, failure diagnosis |
 | `js/store.js` | Persistence (localStorage, IndexedDB for images, optional encrypted stream keys) |
 | `js/ui/*` | Control-room UI |
-| `signaling-server/server.mjs` | Optional helper; not needed to run the app |
+| `signaling-server/server.mjs` | Optional helper (relay, OBS/WHIP ingest, RTMP output); not needed for the rest of the app |
 
 ## Tests
 
@@ -134,6 +139,7 @@ node tests/e2e.mjs          # 25 checks: inputs, multiview, cut/auto, compositio
 node tests/relay.mjs        # optional relay: reusable links, automatic reconnection
 node tests/four-sources.mjs # load check with four 1080p contributors
 node tests/obs.mjs          # OBS/WHIP encoder ingest via the helper (8 checks)
+node tests/rtmp.mjs         # RTMP output via the helper's ffmpeg (needs ffmpeg; 9 checks)
 ```
 
 Set `PLAYWRIGHT_DIR` to the folder containing the `playwright` package if it

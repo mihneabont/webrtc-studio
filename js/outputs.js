@@ -4,6 +4,10 @@
 //  - "peer":   a remote receiver opens receive.html (copy-paste codes or relay)
 //  - "whip":   any WHIP (RFC 9725) ingest endpoint
 //  - "twitch": WHIP with Twitch-specific settings (H.264 + Opus, bitrate caps)
+//  - "rtmp":   any RTMP server (Twitch, YouTube, Facebook...). A browser can't
+//              speak RTMP, so the programme is recorded here (MediaRecorder)
+//              and handed to the optional helper on this computer, whose
+//              ffmpeg pushes it on. Not WebRTC; adds a second or two of delay.
 import { Emitter, uid } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
 import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whipPublish, httpTeardown, preferCodec, codecSupported, sdpCodecs, HttpSignalError } from './rtc.js';
@@ -22,6 +26,18 @@ export const OUTPUT_STATES = {
   connecting: 'Connecting', live: 'Live', unstable: 'Unstable', failed: 'Failed', stopped: 'Stopped',
 };
 
+// Recorder formats in order of preference: H.264 can be passed on by the
+// helper without re-encoding; VP8/VP9 have to be re-encoded there.
+const RTMP_MIMES = [
+  ['video/x-matroska;codecs=avc1,opus', 'h264'], ['video/webm;codecs=h264,opus', 'h264'], ['video/webm;codecs=avc1,opus', 'h264'],
+  ['video/webm;codecs=vp8,opus', 'vp8'], ['video/webm;codecs=vp9,opus', 'vp9'],
+];
+export function rtmpFormat() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  const hit = RTMP_MIMES.find(([m]) => MediaRecorder.isTypeSupported(m));
+  return hit ? { mime: hit[0], codec: hit[1] } : null;
+}
+
 export function defaultKbps(height) {
   return height >= 1080 ? 6000 : height >= 720 ? 3500 : 1500;
 }
@@ -33,11 +49,15 @@ export class OutputManager extends Emitter {
     this.compositor = compositor;
     this.audio = audio;
     this.relay = null;
+    this.helper = () => null; // set by the app: base URL of the helper, if any
     this.list = new Map();
     for (const cfg of store.ws.outputs) this._makeRuntime(cfg);
     this._timer = setInterval(() => this._sampleAll(), 1000);
     window.addEventListener('pagehide', () => {
-      for (const o of this.list.values()) if (o.resourceUrl) httpTeardown(o.resourceUrl, o.token, { keepalive: true });
+      for (const o of this.list.values()) {
+        if (o.resourceUrl) httpTeardown(o.resourceUrl, o.token, { keepalive: true });
+        if (o.rtmp) fetch(o.rtmp.url, { method: 'DELETE', keepalive: true }).catch(() => {});
+      }
     });
   }
 
@@ -56,7 +76,7 @@ export class OutputManager extends Emitter {
   add({ kind = 'peer', name, url = '' }) {
     const h = this.ws.settings.format.height;
     const cfg = {
-      id: uid(4), kind, name: name || (kind === 'twitch' ? 'Twitch' : kind === 'whip' ? 'WHIP output' : `Receiver ${this.ws.outputs.length + 1}`),
+      id: uid(4), kind, name: name || (kind === 'twitch' ? 'Twitch' : kind === 'whip' ? 'WHIP output' : kind === 'rtmp' ? 'RTMP output' : `Receiver ${this.ws.outputs.length + 1}`),
       mode: this.ws.settings.signalingUrl ? 'relay' : 'manual',
       url: kind === 'twitch' ? TWITCH.url : url,
       maxKbps: kind === 'twitch' ? Math.min(TWITCH.defaultKbps, defaultKbps(h)) : defaultKbps(h),
@@ -81,12 +101,14 @@ export class OutputManager extends Emitter {
     this.emit('removed', id);
   }
 
-  update(id, patch) {
+  // silent: don't redraw the card. Used for text fields, which commit on blur:
+  // a redraw then would swallow the click that caused the blur (e.g. on Start).
+  update(id, patch, { silent = false } = {}) {
     const o = this.list.get(id);
     Object.assign(o.cfg, patch);
     this.store.save();
     if ('maxKbps' in patch) this.applyEncoding(o);
-    this.emit('change', o);
+    if (!silent) this.emit('change', o);
   }
 
   _set(o, state, detail) {
@@ -187,13 +209,14 @@ export class OutputManager extends Emitter {
         }
         return await this._invite(o);
       }
+      if (o.cfg.kind === 'rtmp') return await this._rtmp(o);
       return await this._whip(o);
     } catch (e) {
       this._close(o);
       // Retry only what can heal by itself: server overload, or a network
       // error while reconnecting an output that was already live.
-      const retryable = e instanceof HttpSignalError && o.cfg.kind !== 'peer' && o.cfg.autoReconnect &&
-        (e.status >= 500 || e.status === 429 || (e.kind === 'network' && o.wasLive));
+      const retryable = (e instanceof HttpSignalError && o.cfg.kind !== 'peer' && o.cfg.autoReconnect &&
+        (e.status >= 500 || e.status === 429 || (e.kind === 'network' && o.wasLive))) || (e.retry && o.cfg.autoReconnect && o.wasLive);
       if (retryable) this._retry(o, e.message);
       else this._set(o, 'failed', e.message);
       return null;
@@ -244,6 +267,87 @@ export class OutputManager extends Emitter {
     return null;
   }
 
+  // RTMP via the helper: record the programme in ~250 ms pieces and post them
+  // in order. The helper answers each piece only once ffmpeg has taken it, so a
+  // growing queue here means the upload or the RTMP server can't keep up.
+  async _rtmp(o) {
+    const base = this.helper();
+    if (!base) throw new Error('RTMP needs the helper running on this computer. Use Install helper below, then Check again.');
+    if (!o.cfg.url) throw new Error('Enter the RTMP server URL.');
+    const fmt = rtmpFormat();
+    if (!fmt) throw new Error('This browser cannot record the programme for RTMP. Use a current Chrome or Edge.');
+    const server = o.cfg.url.trim().replace(/\/+$/, '');
+    const target = o.token ? `${server}/${o.token}` : server;
+    this._close(o);
+    const gen = o.gen;
+    this._set(o, 'connecting', `Starting ffmpeg in the helper and connecting to ${server.replace(/^rtmps?:\/\//, '').split('/')[0]}…`);
+    let r;
+    try {
+      r = await fetch(`${base}/rtmp`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target, codec: fmt.codec, kbps: o.cfg.maxKbps, fps: this.ws.settings.format.fps }) });
+    } catch {
+      throw Object.assign(new Error(`Can't reach the helper at ${base}. Is it running?`), { retry: true });
+    }
+    const info = await r.json().catch(() => ({}));
+    if (r.status === 404) throw new Error('The helper on this computer is too old for RTMP. Run Install helper again to update it.');
+    if (!r.ok) throw new Error(info.error || `The helper refused (HTTP ${r.status}).`);
+    if (o.gen !== gen) { fetch(`${base}/rtmp/${info.id}`, { method: 'DELETE' }).catch(() => {}); return null; }
+    const rt = o.rtmp = { url: `${base}/rtmp/${info.id}`, queue: [], sending: false, sentBytes: 0, codec: fmt.codec, t0: Date.now(), lastBytes: 0, lastT: Date.now() };
+    const fps = this.ws.settings.format.fps;
+    const rec = new MediaRecorder(this.stream, {
+      mimeType: fmt.mime, videoBitsPerSecond: o.cfg.maxKbps * 1000, audioBitsPerSecond: 128000,
+      // Keyframe every 2 s, which RTMP platforms expect (honoured by recent Chrome).
+      videoKeyFrameIntervalDuration: 2000,
+    });
+    o.rec = rec;
+    const fail = (why) => { if (o.gen === gen) this._retry(o, why); };
+    const pump = async () => {
+      if (rt.sending) return;
+      rt.sending = true;
+      while (rt.queue.length && o.gen === gen) {
+        const blob = rt.queue[0];
+        let res;
+        try { res = await fetch(`${rt.url}/data`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: blob }); } catch { fail('Lost the connection to the helper.'); break; }
+        const st = await res.json().catch(() => ({}));
+        if (o.gen !== gen) break;
+        if (!res.ok) { fail(`RTMP stopped: ${st.error || `helper answered HTTP ${res.status}`}`); break; }
+        rt.queue.shift();
+        rt.sentBytes += blob.size;
+        rt.status = st;
+      }
+      rt.sending = false;
+    };
+    rec.ondataavailable = (e) => {
+      if (o.gen !== gen || !e.data.size) return;
+      rt.queue.push(e.data);
+      pump();
+    };
+    rec.onerror = (e) => fail(`The browser stopped recording the programme: ${e.error?.message || 'unknown error'}`);
+    rec.start(250);
+    // Poll ffmpeg's progress: it is "live" once frames reach the RTMP server.
+    rt.poll = setInterval(async () => {
+      if (o.gen !== gen) return;
+      let st = rt.status;
+      try { const r2 = await fetch(rt.url); st = await r2.json(); if (r2.status === 404) st = { state: 'ended', error: st.error }; } catch { /* keep last */ }
+      if (o.gen !== gen || !st) return;
+      if (st.state === 'ended') { fail(`RTMP stopped: ${st.error || 'ffmpeg ended'}`); return; }
+      const now = Date.now();
+      const upKbps = ((rt.sentBytes - rt.lastBytes) * 8) / (now - rt.lastT);
+      rt.lastBytes = rt.sentBytes; rt.lastT = now;
+      const backlog = rt.queue.length * 0.25;
+      o.stats = { rtmp: { ...st.stats, upKbps, backlog, codec: rt.codec, fpsTarget: fps } };
+      this.emit('stats', o);
+      const frames = (st.stats?.frames || 0) + (st.stats?.secs || 0);
+      if (backlog >= 3 && o.state !== 'unstable') this._set(o, 'unstable', `Falling behind by ${backlog.toFixed(0)} s: the RTMP server or your upload can't keep up. Lower the bitrate.`);
+      else if (frames > 0 && backlog < 3 && o.state !== 'live') {
+        o.startedAt = o.startedAt || Date.now();
+        o.wasLive = true;
+        this._set(o, 'live', `Broadcasting to ${st.url} through the helper (video ${rt.codec === 'h264' ? 'H.264 passed through' : `${rt.codec.toUpperCase()} re-encoded to H.264 by ffmpeg`}, audio AAC).`);
+      }
+    }, 1000);
+    return null;
+  }
+
   _retry(o, why) {
     if (o.cfg.kind !== 'peer' && o.cfg.autoReconnect) {
       const delay = Math.min(30, 2 ** Math.min(o.retries, 5)) * 1000;
@@ -263,6 +367,9 @@ export class OutputManager extends Emitter {
     clearTimeout(o.retryTimer);
     if (o.resourceUrl) { httpTeardown(o.resourceUrl, o.token); o.resourceUrl = null; }
     if (o.pc) { try { o.pc.close(); } catch { /* ignore */ } }
+    if (o.rec) { o.rec.ondataavailable = null; try { o.rec.stop(); } catch { /* ignore */ } }
+    if (o.rtmp) { clearInterval(o.rtmp.poll); fetch(o.rtmp.url, { method: 'DELETE' }).catch(() => {}); }
+    o.rec = null; o.rtmp = null;
     o.pc = null; o.sampler = null; o.video = null; o.invite = null;
     o.gen++;
   }

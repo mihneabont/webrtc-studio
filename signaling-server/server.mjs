@@ -12,11 +12,14 @@
 //   4. WHIP test sink    - a WHIP endpoint that hands the stream to a browser
 //                          receiver page, to test WHIP output end to end.
 //   5. Static hosting    - --static <dir> serves the app itself (local use).
+//   6. RTMP output       - the studio page records its programme and posts the
+//                          pieces here; ffmpeg pushes them to an RTMP server
+//                          (Twitch, YouTube, ...). Needs ffmpeg installed.
 //
-// It never receives, decodes or forwards audio/video: media always flows
-// directly between browsers (or via your TURN server).
+// Apart from the RTMP output (6), it never receives, decodes or forwards
+// audio/video: media flows directly between browsers (or via your TURN server).
 //
-// Usage: node server.mjs [--port 8787] [--static ..]
+// Usage: node server.mjs [--port 8787] [--static ..] [--ffmpeg path]
 // Env:   FORWARD_ALLOW=host1,host2   hosts the CORS forwarder may call
 //        (default: g.webrtc.live-video.net). Use '*' to allow any https host.
 
@@ -26,6 +29,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import dns from 'node:dns/promises';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const arg = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
@@ -33,6 +38,7 @@ const PORT = Number(arg('--port', process.env.PORT || 8787));
 const STATIC = arg('--static', null);
 const FORWARD_ALLOW = (process.env.FORWARD_ALLOW || 'g.webrtc.live-video.net').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_BODY = 256 * 1024;
+const MAX_CHUNK = 16 * 1024 * 1024;
 
 const rooms = new Map(); // room -> Map(peer -> {res, queue})
 const pending = new Map(); // gen -> resolve(message): answers awaited by HTTP requests
@@ -138,15 +144,124 @@ async function unhideMdns(sdp) {
   return sdp;
 }
 
+// --- 6. RTMP output -----------------------------------------------------------
+// Looked up on every use, so installing ffmpeg works without restarting the helper.
+// winget puts ffmpeg on the user's PATH, but a helper started before that (or at
+// sign-in from an older environment) may not see it, so its folders are checked too.
+function findFfmpeg() {
+  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  const candidates = [arg('--ffmpeg', null), process.env.FFMPEG, path.join(path.dirname(fileURLToPath(import.meta.url)), exe)];
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) if (dir) candidates.push(path.join(dir, exe));
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    const wg = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet');
+    candidates.push(path.join(wg, 'Links', exe));
+    try {
+      for (const pkg of fs.readdirSync(path.join(wg, 'Packages')).filter((d) => /ffmpeg/i.test(d))) {
+        const root = path.join(wg, 'Packages', pkg);
+        for (const sub of fs.readdirSync(root)) candidates.push(path.join(root, sub, 'bin', exe));
+      }
+    } catch { /* no winget packages */ }
+  }
+  return candidates.find((c) => { try { return c && fs.statSync(c).isFile(); } catch { return false; } }) || null;
+}
+
+const rtmp = new Map(); // id -> session
+const maskUrl = (u) => u.replace(/\/[^/]*$/, '/••••');
+
+function startRtmp({ url, codec, kbps, fps }) {
+  const ff = findFfmpeg();
+  if (!ff) throw Object.assign(new Error('ffmpeg is not installed on this computer. Run the helper installer again, or install ffmpeg.'), { status: 501 });
+  if (!/^rtmps?:\/\/[^\s/]+\/\S+$/i.test(url || '')) throw Object.assign(new Error('Enter an rtmp:// or rtmps:// server URL.'), { status: 400 });
+  const id = crypto.randomUUID();
+  const gop = Math.max(1, Math.round((Number(fps) || 30) * 2));
+  // H.264 from the browser is passed through untouched (cheap). Anything else
+  // (browsers without an H.264 recorder) is re-encoded, which costs CPU.
+  const video = codec === 'h264' ? ['-c:v', 'copy']
+    : ['-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p', '-g', String(gop),
+      '-b:v', `${kbps}k`, '-maxrate', `${kbps}k`, '-bufsize', `${kbps * 2}k`];
+  const argv = ['-hide_banner', '-loglevel', 'error', '-stats', '-fflags', '+genpts', '-f', 'matroska,webm', '-i', 'pipe:0',
+    '-map', '0:v:0', '-map', '0:a:0?', ...video, '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+    '-flvflags', 'no_duration_filesize', '-f', 'flv', url];
+  const p = spawn(ff, argv, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+  const s = { id, p, url: maskUrl(url), state: 'running', stats: null, errors: [], last: Date.now(), bytes: 0, code: null };
+  let buf = '';
+  p.stderr.on('data', (d) => {
+    buf += d.toString();
+    const lines = buf.split(/\r|\n/); buf = lines.pop();
+    for (const l of lines.map((x) => x.trim()).filter(Boolean)) {
+      // Progress lines look like "frame= 123 fps= 30 ... size= 1024kB time=00:00:04.10 bitrate=2046.1kbits/s speed=1x";
+      // with copied video ffmpeg may leave out frame/fps.
+      if (/time=\s*\S+/.test(l) && /bitrate=/.test(l)) {
+        const f = (k) => (new RegExp(`${k}=\\s*([^\\s]+)`).exec(l) || [])[1];
+        const t = f('time') || '';
+        const secs = t.split(':').reduce((a, x) => a * 60 + (Number(x) || 0), 0);
+        s.stats = { frames: Number(f('frame')) || 0, fps: f('fps') !== undefined ? Number(f('fps')) : undefined, time: t.replace(/\.\d+$/, ''), secs,
+          kbps: parseFloat(f('bitrate')) || 0, speed: parseFloat(f('speed')) || 0 };
+      } else { s.errors.push(l.replaceAll(url, s.url).replace(/^\[[^\]]*\]\s*/, "")); if (s.errors.length > 12) s.errors.shift(); }
+    }
+  });
+  p.stdin.on('error', () => { /* ffmpeg exited; reported through state */ });
+  p.on('error', (e) => { s.state = 'ended'; s.errors.push(e.message); });
+  p.on('exit', (code) => { s.state = 'ended'; s.code = code; log(`RTMP ${id.slice(0, 8)} ended (exit ${code}) ${s.errors.slice(-2).join(' | ')}`); });
+  rtmp.set(id, s);
+  log(`RTMP ${id.slice(0, 8)} -> ${s.url} (video ${codec === 'h264' ? 'copied' : 're-encoded'})`);
+  return s;
+}
+function stopRtmp(s) {
+  if (!s) return;
+  rtmp.delete(s.id);
+  try { s.p.stdin.end(); } catch { /* ignore */ }
+  setTimeout(() => { if (s.p.exitCode === null) s.p.kill(); }, 3000);
+}
+const rtmpStatus = (s) => ({ id: s.id, state: s.state, stats: s.stats, error: s.state === 'ended' ? (s.errors.slice(-3).join(' ') || `ffmpeg exited (code ${s.code})`) : null, url: s.url });
+// The page stops sending when it closes; don't keep ffmpeg around for it.
+setInterval(() => { for (const s of rtmp.values()) if (Date.now() - s.last > 20000) { log(`RTMP ${s.id.slice(0, 8)}: no data for 20 s, stopping`); stopRtmp(s); } }, 5000).unref();
+
+function readRaw(req, max) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', (c) => { size += c.length; if (size > max) { reject(new Error('too large')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+async function handleRtmp(req, res, parts) {
+  const json = (code, obj) => res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(obj));
+  if (parts.length === 1 && req.method === 'POST') {
+    let body; try { body = JSON.parse(await readBody(req)); } catch { json(400, { error: 'bad json' }); return; }
+    try { json(201, rtmpStatus(startRtmp(body))); } catch (e) { json(e.status || 500, { error: e.message }); }
+    return;
+  }
+  const s = rtmp.get(parts[1]);
+  if (!s) { json(404, { error: 'This RTMP session has ended.' }); return; }
+  if (parts.length === 2 && req.method === 'GET') { json(200, rtmpStatus(s)); return; }
+  if (parts.length === 2 && req.method === 'DELETE') { stopRtmp(s); json(200, { ok: true }); return; }
+  if (parts.length === 3 && parts[2] === 'data' && req.method === 'POST') {
+    const data = await readRaw(req, MAX_CHUNK);
+    s.last = Date.now();
+    if (s.state !== 'running') { json(410, rtmpStatus(s)); return; }
+    s.bytes += data.length;
+    // Wait until ffmpeg has taken the piece, so a slow upstream slows the page
+    // down (and the page can tell) instead of filling memory here.
+    if (!s.p.stdin.write(data)) await new Promise((r) => { s.p.stdin.once('drain', r); s.p.once('exit', r); });
+    json(200, rtmpStatus(s));
+    return;
+  }
+  json(404, { error: 'not found' });
+}
+
 async function handle(req, res) {
   cors(res);
   const url = new URL(req.url, `http://${req.headers.host}`);
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   if (req.method === 'OPTIONS') { res.writeHead(204, parts[0] === 'whip-in' || parts[0] === 'whip-session' ? { 'Accept-Post': 'application/sdp', 'Accept-Patch': 'application/trickle-ice-sdpfrag' } : {}).end(); return; }
   if (parts[0] === 'helper' && parts.length === 1) {
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', features: ['relay', 'forward', 'whip-in', 'whip-test'], lan: lanIPv4(), port: PORT }));
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', features: ['relay', 'forward', 'whip-in', 'whip-test', ...(findFfmpeg() ? ['rtmp'] : [])], lan: lanIPv4(), port: PORT, ffmpeg: !!findFfmpeg() }));
     return;
   }
+
+  if (parts[0] === 'rtmp' && (parts.length === 1 || (parts.length <= 3 && /^[0-9a-f-]{36}$/.test(parts[1])))) { await handleRtmp(req, res, parts); return; }
 
   // 1. Relay: GET = subscribe (Server-Sent Events), POST = send to a peer.
   if (parts[0] === 'r' && parts.length === 3 && valid(parts[1]) && valid(parts[2])) {
@@ -289,5 +404,6 @@ http.createServer((req, res) => handle(req, res).catch((e) => { try { res.writeH
     console.log(`  forwarder: /forward?target=<url>   (allowed hosts: ${FORWARD_ALLOW.join(', ')})`);
     console.log(`  WHIP in:   /whip-in/<room>/<source>   (OBS -> studio)`);
     console.log(`  WHIP sink: /whip/<room>/<output>`);
+    console.log(`  RTMP out:  /rtmp   (ffmpeg: ${findFfmpeg() || 'not found'})`);
     if (STATIC) console.log(`  static:    ${path.resolve(STATIC)}`);
   });

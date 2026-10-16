@@ -18,6 +18,7 @@ networks.
 | Signaling relay (`signaling-server/`) | Optional | No, only SDP text | Reusable links and automatic reconnection instead of copy-paste codes |
 | WHIP ingest for OBS (same helper) | Optional, needed only for OBS/WHIP encoder inputs | No, only the SDP text | OBS publishes with an HTTP POST, which a web page cannot receive. The helper hands the offer to the studio page and returns its answer; media then flows OBS → studio browser directly |
 | WHIP/WHEP CORS forwarder (same helper) | Optional | No, only the SDP HTTP request | For ingest endpoints that reject requests from web pages |
+| RTMP output (same helper + ffmpeg) | Optional, needed only for RTMP outputs | **Yes**, the programme, on the studio computer | Browsers can't speak RTMP. The page records the programme and the helper's ffmpeg pushes it to the RTMP server |
 
 ## 1. Signaling without a server
 
@@ -82,6 +83,27 @@ supported; OBS sends all candidates in its offer, so this doesn't matter for
 OBS. OBS must use a codec the studio browser can decode in WebRTC: H.264 is
 safe; HEVC and AV1 depend on the browser and hardware. Tested with a browser
 acting as the WHIP encoder (`tests/obs.mjs`), not with OBS itself.
+
+## 3c. RTMP output
+
+Browsers can only send live media over WebRTC, so RTMP (YouTube, Twitch,
+Facebook and most platforms) needs something outside the page. The RTMP
+output records the programme with `MediaRecorder` in 250 ms pieces and posts
+them to the helper on the same computer (`/rtmp`), which feeds them to ffmpeg.
+H.264 from the browser is passed through unchanged; audio is converted from
+Opus to AAC. Browsers that can't record H.264 (Firefox, open-source Chromium)
+get the video re-encoded by ffmpeg, which costs CPU. This is the one place
+where the helper handles media, and it only does so on the studio computer.
+
+- Expect 1 to 3 s more delay than the WebRTC outputs.
+- The keyframe interval is requested as 2 s (`videoKeyFrameIntervalDuration`),
+  which recent Chrome honours; older browsers may produce longer intervals.
+- Bitrate changes apply on the next start, not live.
+- If the upload or the RTMP server can't keep up, the card shows how far
+  behind the stream is; pieces are queued in the page, not dropped.
+- Tested (`tests/rtmp.mjs`) against a local ffmpeg RTMP listener with the
+  re-encode path, and the pass-through path with an H.264 file; not yet
+  against a real platform.
 
 ## 4. Codecs and encoder control
 

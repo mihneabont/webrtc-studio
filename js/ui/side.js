@@ -5,8 +5,8 @@ import { codecSupported } from '../rtc.js';
 import { field, text, select, check, linkBox, statLine, CardList } from './forms.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
+import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
 
-const HELPER_PORT = 8788;
 
 const TABS = { sources: 'Sources', scenes: 'Scenes', graphics: 'Graphics', outputs: 'Outputs', settings: 'Settings' };
 
@@ -147,62 +147,6 @@ function mountSourcesTab(app, root) {
     return el('div', { class: `card ${s.state === 'live' ? 'live' : s.state === 'failed' ? 'failed' : ''}`, dataset: { id: s.id } },
       head, state, detail, err, stats, ...actions, settings);
   });
-
-  // A web page can't install software, so this hands the user a setup file
-  // that installs Node.js if needed, fetches the helper from the site this
-  // page came from, and starts it on port 8788 (8787 is often taken by a local web server).
-  function downloadHelperInstaller() {
-    const src = new URL('signaling-server/server.mjs', location.href).href;
-    const fwSrc = new URL('signaling-server/firewall.ps1', location.href).href;
-    const ps = (c) => `powershell -NoProfile -Command "${c}"`;
-    const stopOld = ps(`Get-CimInstance Win32_Process -Filter \\"Name='node.exe'\\" | Where-Object { $_.CommandLine -like '*WebRTCStudioHelper*' -or $_.CommandLine -like '*signaling-server*server.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`);
-    const cmd = [
-      '@echo off',
-      'rem WebRTC Studio helper: lets OBS and phone apps (WHIP) send into the studio page.',
-      'rem Runs in the background and starts again at every sign-in. Run with /uninstall to remove it.',
-      'setlocal',
-      'set "DIR=%LOCALAPPDATA%\\WebRTCStudioHelper"',
-      'set "STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\WebRTC Studio helper.vbs"',
-      'if /i "%~1"=="/uninstall" goto uninstall',
-      'echo == WebRTC Studio helper ==',
-      'set "NODE="',
-      'for /f "delims=" %%N in (\'where node 2^>nul\') do if not defined NODE set "NODE=%%N"',
-      'if not defined NODE if exist "%ProgramFiles%\\nodejs\\node.exe" set "NODE=%ProgramFiles%\\nodejs\\node.exe"',
-      'if defined NODE goto havenode',
-      'echo Installing Node.js LTS. Windows may ask for permission...',
-      'winget install --id OpenJS.NodeJS.LTS -e --silent --accept-source-agreements --accept-package-agreements',
-      'if exist "%ProgramFiles%\\nodejs\\node.exe" set "NODE=%ProgramFiles%\\nodejs\\node.exe"',
-      'if defined NODE goto havenode',
-      'echo Node.js did not install. Install it from https://nodejs.org and run this file again.',
-      'pause',
-      'exit /b 1',
-      ':havenode',
-      'if not exist "%DIR%" mkdir "%DIR%"',
-      `echo Downloading the helper from ${src}`,
-      ps(`Invoke-WebRequest -UseBasicParsing '${src}' -OutFile '%DIR%\\server.mjs'`),
-      'if not exist "%DIR%\\server.mjs" (echo Download failed. & pause & exit /b 1)',
-      `> "%STARTUP%" echo CreateObject("WScript.Shell").Run """%NODE%"" ""%DIR%\\server.mjs"" --port ${HELPER_PORT}", 0, False`,
-      stopOld,
-      'wscript "%STARTUP%"',
-      'echo Allowing your phone and OBS on this network to connect (Windows asks for admin once)...',
-      ps(`Invoke-WebRequest -UseBasicParsing '${fwSrc}' -OutFile '%DIR%\\firewall.ps1'`),
-      ps(`Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \\"%DIR%\\firewall.ps1\\" -Port ${HELPER_PORT}'`),
-      'timeout /t 3 /nobreak >nul',
-      ps(`try { Invoke-WebRequest -UseBasicParsing http://localhost:${HELPER_PORT}/helper | Out-Null; Write-Host 'The helper is running. Go back to the studio page and click Check again.' -ForegroundColor Green } catch { Write-Host 'The helper did not answer yet. Wait a few seconds, then click Check again in the studio.' -ForegroundColor Yellow }`),
-      'pause',
-      'exit /b 0',
-      ':uninstall',
-      stopOld,
-      'del "%STARTUP%" 2>nul',
-      'if exist "%DIR%\\firewall.ps1" powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList \'-NoProfile -ExecutionPolicy Bypass -File \\\"%DIR%\\firewall.ps1\\\" -Remove\'"',
-      'timeout /t 3 /nobreak >nul',
-      'rmdir /s /q "%DIR%" 2>nul',
-      'echo The helper is removed.',
-      'pause',
-    ].join('\r\n') + '\r\n';
-    const a = el('a', { href: URL.createObjectURL(new Blob([cmd], { type: 'application/octet-stream' })), download: 'webrtc-studio-helper-setup.cmd' });
-    document.body.append(a); a.click(); a.remove();
-  }
 
   // A helper reached as localhost gives OBS on this computer a working URL, but a
   // phone needs this computer's network address instead.

@@ -71,9 +71,12 @@ app.detectHelper = async () => {
       }
     } catch { /* not there */ }
   }
+  if (app.helperOrigin || app.helperInfo) { app.helperOrigin = null; app.helperInfo = null; app.ui.emit('settings'); }
   return null;
 };
 app.detectHelper();
+// RTMP output goes through the helper: the one found above, or the configured relay.
+outputs.helper = () => app.helperOrigin || store.ws.settings.signalingUrl || null;
 
 // --- UI --------------------------------------------------------------------
 mountMonitors(app, $('#monitors'));
@@ -124,7 +127,7 @@ function renderStatus() {
   const hw = hardwareWarning(srcs);
   if (hw) alerts.push(['warn', hw]);
   for (const o of liveOuts) {
-    const lim = o.stats?.out.video?.limitation;
+    const lim = o.stats?.out?.video?.limitation;
     if (lim === 'cpu') alerts.push(['warn', `"${o.cfg.name}": the video encoder is limited by CPU, so quality is reduced. Lower the resolution or frame rate, or stop other outputs.`]);
   }
   if (store.loadedFromDisk && (srcs.length || outs.length) && !dismissed.has('restored') &&
