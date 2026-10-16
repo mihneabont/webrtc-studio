@@ -19,6 +19,7 @@ networks.
 | WHIP ingest for OBS (same helper) | Optional, needed only for OBS/WHIP encoder inputs | No, only the SDP text | OBS publishes with an HTTP POST, which a web page cannot receive. The helper hands the offer to the studio page and returns its answer; media then flows OBS → studio browser directly |
 | WHIP/WHEP CORS forwarder (same helper) | Optional | No, only the SDP HTTP request | For ingest endpoints that reject requests from web pages |
 | RTMP output (same helper + ffmpeg) | Optional, needed only for RTMP outputs | **Yes**, the programme, on the studio computer | Browsers can't speak RTMP. The page records the programme and the helper's ffmpeg pushes it to the RTMP server |
+| SRT input (same helper + ffmpeg) | Optional, needed only for SRT sources | **Yes**, that source, on the studio computer | Browsers can't receive SRT (raw UDP). The helper's ffmpeg listens for the sender, re-encodes to H.264 + Opus and publishes it to the studio page with WHIP |
 
 ## 1. Signaling without a server
 
@@ -104,6 +105,33 @@ where the helper handles media, and it only does so on the studio computer.
 - Tested (`tests/rtmp.mjs`) against a local ffmpeg RTMP listener with the
   re-encode path, and the pass-through path with an H.264 file; not yet
   against a real platform.
+
+## 3d. SRT input
+
+A web page can't open UDP sockets, so it can't receive SRT. An *SRT (via
+helper)* source asks the helper (`/srt`) to listen on a UDP port with ffmpeg.
+When a sender connects (mode Caller), ffmpeg re-encodes the stream to H.264
+Baseline + Opus and publishes it with WHIP to the helper's own `/whip-in`, which
+hands it to the studio page exactly like an OBS source. When the sender stops,
+ffmpeg exits and the helper listens again, so the sender can reconnect at any
+time.
+
+- Any codec the sender uses works (H.264, HEVC, AAC...), because ffmpeg always
+  re-encodes. That costs CPU on the studio computer (roughly one core for
+  1080p30 with x264 `veryfast`) and adds about 0.5 to 1 s of delay on top of
+  the SRT latency.
+- ffmpeg's WHIP muxer stops answering ICE connectivity checks once connected,
+  and Chrome drops such a connection after about 30 s. The helper therefore
+  puts a small UDP relay between ffmpeg and the browser that forwards the
+  media and answers those checks for ffmpeg. It also adds the a=ssrc lines
+  ffmpeg leaves out for its retransmission stream, which Chrome otherwise
+  rejects.
+- Needs ffmpeg 8 or later with SRT support (the installer's Gyan build has it).
+- Senders on other networks need UDP port forwarding on the router; the
+  installer's firewall rule allows UDP 9000-9099 from anywhere, so set an SRT
+  passphrase in that case.
+- Tested on Windows with ffmpeg 9.0 as both sender and converter (H.264 and
+  HEVC input, AAC audio), not yet with Larix or a hardware encoder.
 
 ## 4. Codecs and encoder control
 

@@ -34,6 +34,11 @@ Facebook…): add a **+ RTMP** output, paste the server URL and stream key, and
 start it. A browser can't send RTMP by itself, so this output records the
 programme and the helper's ffmpeg pushes it on. See docs/LIMITATIONS.md.
 
+It also takes **SRT** senders (Larix, vMix, hardware encoders): add an *SRT (via
+helper)* source and click **Start listening**. The helper listens on a UDP port
+(9000 and up), and ffmpeg converts the stream to WebRTC for the studio page, so
+any codec the sender uses works. See docs/LIMITATIONS.md.
+
 Locally, without hosting: `node signaling-server/server.mjs --static . --port 8787`
 serves the app and the helper together.
 
@@ -61,6 +66,9 @@ browser.
    (see below), because a web page cannot receive OBS's HTTP request. The
    helper only passes the connection details on; the video goes straight from
    OBS to the studio browser.
+   **SRT senders** work the same way through the helper: choose *SRT (via
+   helper)*, click **Start listening**, and point the sender (mode Caller) at
+   the address the card shows.
 2. **Monitor** every source in the multiview (layouts 1/2/4/6/9/16). Each tile
    shows name, tally, connection state, resolution, frame rate, bitrate, RTT,
    health and an audio meter, or a diagnosis when there is no picture.
@@ -125,7 +133,7 @@ you reconnect them.
 | `js/rtc.js` | ICE config, gathering, codec preferences, stats, WHIP/WHEP client, failure diagnosis |
 | `js/store.js` | Persistence (localStorage, IndexedDB for images, optional encrypted stream keys) |
 | `js/ui/*` | Control-room UI |
-| `signaling-server/server.mjs` | Optional helper (relay, OBS/WHIP ingest, RTMP output); not needed for the rest of the app |
+| `signaling-server/server.mjs` | Optional helper (relay, OBS/WHIP ingest, SRT input, RTMP output); not needed for the rest of the app |
 
 ## Tests
 

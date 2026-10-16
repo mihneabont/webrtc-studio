@@ -5,7 +5,7 @@ import { el } from '../util.js';
 export const HELPER_PORT = 8788;
 
 // A web page can't install software, so this hands the user a setup file that
-// installs Node.js and ffmpeg (for RTMP output) if needed, fetches the helper
+// installs Node.js and ffmpeg (for RTMP output and SRT input) if needed, fetches the helper
 // from the site this page came from, and starts it on HELPER_PORT.
 export function downloadHelperInstaller() {
   const src = new URL('signaling-server/server.mjs', location.href).href;
@@ -15,7 +15,7 @@ export function downloadHelperInstaller() {
   const cmd = [
     '@echo off',
     'rem WebRTC Studio helper: lets OBS and phone apps (WHIP) send into the studio page,',
-    'rem and sends the programme to RTMP servers (with ffmpeg).',
+    'rem receives SRT senders, and sends the programme to RTMP servers (both with ffmpeg).',
     'rem Runs in the background and starts again at every sign-in. Run with /uninstall to remove it.',
     'setlocal',
     'set "DIR=%LOCALAPPDATA%\\WebRTCStudioHelper"',
@@ -39,9 +39,9 @@ export function downloadHelperInstaller() {
     'if not defined FF if exist "%LOCALAPPDATA%\\Microsoft\\WinGet\\Links\\ffmpeg.exe" set "FF=1"',
     'if not defined FF for /d %%D in ("%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\*FFmpeg*") do set "FF=1"',
     'if defined FF goto haveff',
-    'echo Installing ffmpeg (used for RTMP output)...',
+    'echo Installing ffmpeg (used for RTMP output and SRT input)...',
     'winget install --id Gyan.FFmpeg.Essentials -e --silent --accept-source-agreements --accept-package-agreements',
-    'if errorlevel 1 echo ffmpeg did not install. Everything else works; RTMP output needs ffmpeg (winget install Gyan.FFmpeg.Essentials).',
+    'if errorlevel 1 echo ffmpeg did not install. Everything else works; RTMP output and SRT input need ffmpeg (winget install Gyan.FFmpeg.Essentials).',
     ':haveff',
     'if not exist "%DIR%" mkdir "%DIR%"',
     `echo Downloading the helper from ${src}`,

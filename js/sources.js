@@ -2,6 +2,9 @@
 //  - "peer": a remote contributor opens contribute.html. Signaling either by
 //    copy-paste codes (no infrastructure at all) or via the optional relay.
 //  - "whep": pull from any WHEP endpoint (an external WebRTC server/encoder).
+//  - "obs":  an encoder publishes with WHIP through the helper.
+//  - "srt":  the helper listens for an SRT sender and converts it with ffmpeg,
+//            then publishes it here like an OBS source.
 // Every source has its own RTCPeerConnection, so one failing never affects
 // the others.
 import { Emitter, uid, relayWorksRemotely } from './util.js';
@@ -21,6 +24,7 @@ export const SOURCE_STATES = {
 
 export function stateLabel(s) {
   if (s.cfg.kind === 'obs' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for encoder';
+  if (s.cfg.kind === 'srt' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for SRT sender';
   return SOURCE_STATES[s.state] || s.state;
 }
 
@@ -80,7 +84,12 @@ export class SourceManager extends Emitter {
       id: uid(4), name: name || `Source ${this.ws.sources.length + 1}`, kind,
       mode: mode || (relayWorksRemotely(this.ws.settings.signalingUrl) ? 'relay' : 'manual'), whepUrl,
     };
-    if (kind === 'obs') { cfg.mode = 'relay'; cfg.token = uid(12); }
+    if (kind === 'obs' || kind === 'srt') { cfg.mode = 'relay'; cfg.token = uid(12); }
+    if (kind === 'srt') {
+      const used = new Set(this.ws.sources.map((c) => c.srtPort));
+      let port = 9000; while (used.has(port)) port++;
+      Object.assign(cfg, { srtPort: port, srtLatency: 200, srtPass: '', srtOn: false });
+    }
     this.ws.sources.push(cfg);
     this.store.save();
     const s = this._makeRuntime(cfg);
@@ -93,6 +102,7 @@ export class SourceManager extends Emitter {
     const s = this.list.get(id);
     if (!s) return;
     this._teardown(s, 'removed');
+    if (s.cfg.kind === 'srt') this.stopSrt(s);
     this.list.delete(id);
     this.ws.sources = this.ws.sources.filter((c) => c.id !== id);
     delete this.ws.audio.channels[id];
@@ -166,7 +176,7 @@ export class SourceManager extends Emitter {
       const st = pc.connectionState;
       if (st === 'connected') {
         clearTimeout(s.recoverTimer);
-        this._set(s, 'live', { whep: 'Receiving from WHEP endpoint.', obs: 'Receiving from the encoder (OBS/WHIP).' }[s.cfg.kind] || 'Receiving from contributor.');
+        this._set(s, 'live', { whep: 'Receiving from WHEP endpoint.', obs: 'Receiving from the encoder (OBS/WHIP).', srt: 'Receiving the SRT stream (converted by the helper).' }[s.cfg.kind] || 'Receiving from contributor.');
         this._sendTally(s, true);
       } else if (st === 'disconnected') {
         this._set(s, 'unstable', 'Connection interrupted. The browser is trying to recover it…');
@@ -222,7 +232,9 @@ export class SourceManager extends Emitter {
     if (s.cfg.mode === 'relay' && s.cfg.kind === 'peer') this._relaySend(`src-${s.id}`, { type: 'bye' });
     this._teardown(s, 'disconnect');
     if (s.cfg.kind === 'obs') s.blocked = true;
-    this._set(s, 'offline', s.cfg.kind === 'obs' ? 'Disconnected by operator. Encoder connections are refused until you click Accept encoder.' : 'Disconnected by operator.');
+    if (s.cfg.kind === 'srt') { this.stopSrt(s); this.update(s.id, { srtOn: false }); }
+    this._set(s, 'offline', s.cfg.kind === 'obs' ? 'Disconnected by operator. Encoder connections are refused until you click Accept encoder.'
+      : s.cfg.kind === 'srt' ? 'Stopped. The helper is not listening for this SRT source.' : 'Disconnected by operator.');
   }
 
   // Manual (copy-paste) signaling ------------------------------------------
@@ -268,6 +280,7 @@ export class SourceManager extends Emitter {
         // After a studio reload, ask every relay contributor to say hello again.
         for (const s of this.list.values()) {
           if (s.cfg.kind === 'obs' && s.state === 'offline') this._set(s, 'waiting', 'Waiting for the encoder. Start streaming in OBS.');
+          if (s.cfg.kind === 'srt' && s.cfg.srtOn && !s.srt) this.startSrt(s.id);
           if (s.cfg.kind === 'peer' && s.cfg.mode === 'relay' && s.state !== 'live') {
             this._relaySend(`src-${s.id}`, { type: 'rehello' });
             if (s.state === 'offline') this._set(s, 'waiting', 'Waiting for the contributor to open their link.');
@@ -300,7 +313,11 @@ export class SourceManager extends Emitter {
     const reply = (msg) => this._relaySend('ingest', { gen: m.gen, ...msg });
     const s = this.list.get(m.slot);
     if (m.type === 'whip-bye') {
-      if (s && s.whipGen === m.gen) { this._teardown(s, 'bye'); this._set(s, 'ended', 'The encoder stopped streaming.'); }
+      if (s && s.whipGen === m.gen) {
+        this._teardown(s, 'bye');
+        if (s.cfg.kind === 'srt') this._set(s, 'waiting', 'The SRT sender stopped. The helper is listening again; the sender can reconnect.');
+        else this._set(s, 'ended', 'The encoder stopped streaming.');
+      }
       return;
     }
     if (m.type === 'whip-trickle') {
@@ -316,7 +333,7 @@ export class SourceManager extends Emitter {
       return;
     }
     if (m.type !== 'whip-offer') return;
-    if (!s || s.cfg.kind !== 'obs') return reply({ type: 'reject', status: 404, reason: 'No such source in the studio. Copy the server URL again.' });
+    if (!s || (s.cfg.kind !== 'obs' && s.cfg.kind !== 'srt')) return reply({ type: 'reject', status: 404, reason: 'No such source in the studio. Copy the server URL again.' });
     if ((m.auth || '').replace(/^Bearer\s+/i, '') !== s.cfg.token) {
       this._set(s, s.state, 'An encoder tried to connect with a wrong bearer token.');
       return reply({ type: 'reject', status: 401, reason: 'Wrong bearer token.' });
@@ -415,6 +432,7 @@ export class SourceManager extends Emitter {
     if (!s) return null;
     s.retries = 0;
     if (s.cfg.kind === 'whep') return this.connectWhep(id);
+    if (s.cfg.kind === 'srt') return this.startSrt(id);
     if (s.cfg.kind === 'obs') {
       s.blocked = false;
       this._teardown(s, 'reconnect');
@@ -432,7 +450,9 @@ export class SourceManager extends Emitter {
   }
 
   _autoRecover(s, why) {
-    if (s.cfg.kind === 'obs') {
+    if (s.cfg.kind === 'srt') {
+      this._set(s, s.state, `${why} The helper keeps listening; the SRT sender can reconnect.`);
+    } else if (s.cfg.kind === 'obs') {
       this._set(s, s.state, `${why} Waiting for the encoder to reconnect (OBS retries automatically).`);
     } else if (s.cfg.kind === 'whep') {
       clearTimeout(s.retryTimer);
@@ -446,6 +466,70 @@ export class SourceManager extends Emitter {
     } else {
       this._set(s, s.state, `${why} With copy-paste signaling, reconnecting needs a new invite (click Reconnect).`);
     }
+  }
+
+  // SRT input through the helper -------------------------------------------
+
+  // The helper's address, set by the app (the one found on this computer, or the relay).
+  helper() { return null; }
+
+  async startSrt(id) {
+    const s = this.list.get(id);
+    if (!s || s.cfg.kind !== 'srt') return null;
+    const base = this.helper();
+    if (!base || !this.relay) { this._set(s, 'failed', 'SRT input needs the helper running on this computer.'); return null; }
+    this.stopSrt(s);
+    s.retries = 0;
+    this._set(s, 'connecting', `Asking the helper to listen for SRT on port ${s.cfg.srtPort}…`);
+    let r, info;
+    try {
+      r = await fetch(`${base}/srt`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: this.ws.settings.room, slot: s.id, token: s.cfg.token, port: s.cfg.srtPort, latency: s.cfg.srtLatency, passphrase: s.cfg.srtPass || '', kbps: s.cfg.srtKbps }) });
+      info = await r.json().catch(() => ({}));
+    } catch {
+      this._set(s, 'failed', `Can't reach the helper at ${base}. Is it running?`);
+      return null;
+    }
+    if (r.status === 404) { this._set(s, 'failed', 'The helper on this computer is too old for SRT. Run Install helper again to update it.'); return null; }
+    if (!r.ok) { this._set(s, 'failed', info.error || `The helper refused (HTTP ${r.status}).`); return null; }
+    if (!s.cfg.srtOn) this.update(s.id, { srtOn: true });
+    s.srt = { url: `${base}/srt/${info.id}`, info };
+    s.srt.poll = setInterval(() => this._pollSrt(s), 3000);
+    this._srtState(s, info);
+    return info;
+  }
+
+  async _pollSrt(s) {
+    const rt = s.srt;
+    if (!rt) return;
+    try {
+      const r = await fetch(rt.url, { cache: 'no-store' });
+      const info = await r.json().catch(() => ({}));
+      if (s.srt !== rt) return;
+      if (r.status === 404) { this.stopSrt(s); if (s.cfg.srtOn) this.startSrt(s.id); return; } // helper restarted
+      rt.info = info;
+      this._srtState(s, info);
+    } catch {
+      if (s.srt === rt && s.state !== 'live') this._set(s, 'failed', "Can't reach the helper. Is it still running?");
+    }
+  }
+
+  _srtState(s, info) {
+    // Runs on every poll: act only when something the card shows changed.
+    const key = [info.state, info.port, info.input?.video, info.input?.audio, info.error].join('|');
+    if (key === s.srt?.key) return;
+    if (s.srt) s.srt.key = key;
+    if (s.pc && (s.state === 'live' || s.state === 'connecting' || s.state === 'unstable')) { this.emit('change', s); return; }
+    if (info.state === 'error') this._set(s, 'failed', `The helper could not listen on port ${info.port}: ${info.error}`);
+    else if (info.state === 'listening') this._set(s, 'waiting', `The helper is listening on port ${info.port}. Start the SRT sender.`);
+    else this._set(s, 'connecting', 'SRT sender connected. Converting and connecting…');
+  }
+
+  stopSrt(s) {
+    if (!s?.srt) return;
+    clearInterval(s.srt.poll);
+    fetch(s.srt.url, { method: 'DELETE' }).catch(() => {});
+    s.srt = null;
   }
 
   // Data channel to the contributor: tally lights and names.

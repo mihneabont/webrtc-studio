@@ -15,9 +15,13 @@
 //   6. RTMP output       - the studio page records its programme and posts the
 //                          pieces here; ffmpeg pushes them to an RTMP server
 //                          (Twitch, YouTube, ...). Needs ffmpeg installed.
+//   7. SRT input         - listens for an SRT sender; ffmpeg converts it to
+//                          WebRTC and sends it into the studio like OBS (3).
+//                          Needs ffmpeg installed.
 //
-// Apart from the RTMP output (6), it never receives, decodes or forwards
-// audio/video: media flows directly between browsers (or via your TURN server).
+// Apart from the RTMP output (6) and SRT input (7), it never receives, decodes
+// or forwards audio/video: media flows directly between browsers (or via your
+// TURN server).
 //
 // Usage: node server.mjs [--port 8787] [--static ..] [--ffmpeg path]
 // Env:   FORWARD_ALLOW=host1,host2   hosts the CORS forwarder may call
@@ -29,7 +33,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import dns from 'node:dns/promises';
-import { spawn } from 'node:child_process';
+import dgram from 'node:dgram';
+import net from 'node:net';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
@@ -120,6 +126,24 @@ function onlyLocalHost(sdp) {
     if (!kept && /^a=candidate:\S+ 1 udp \d+ \d+\.\d+\.\d+\.\d+ \d+ typ host/i.test(l)) return (kept = true);
     return false;
   }).join('\r\n');
+}
+// ffmpeg's WHIP muxer lists its retransmission (RTX) stream in a FID group
+// but gives it no a=ssrc lines, which Chrome refuses ("Failed to add remote
+// stream ssrc"). Add the missing lines, copied from the primary stream.
+function fixSsrcGroups(sdp) {
+  const lines = sdp.split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]);
+    const g = /^a=ssrc-group:FID (\d+) (\d+)/.exec(lines[i]);
+    if (!g || lines.some((l) => l.startsWith(`a=ssrc:${g[2]} `))) continue;
+    // Insert after the primary's own a=ssrc lines, which follow the group.
+    let j = i + 1;
+    while (j < lines.length && lines[j].startsWith(`a=ssrc:${g[1]} `)) out.push(lines[j++]);
+    for (const l of lines.slice(i + 1, j)) out.push(l.replace(`a=ssrc:${g[1]} `, `a=ssrc:${g[2]} `));
+    i = j - 1;
+  }
+  return out.join('\r\n');
 }
 async function unhideMdns(sdp) {
   const names = [...new Set([...sdp.matchAll(/^a=candidate:\S+ \d+ \S+ \d+ (\S+\.local) /gim)].map((m) => m[1]))];
@@ -251,16 +275,205 @@ async function handleRtmp(req, res, parts) {
   json(404, { error: 'not found' });
 }
 
+// --- 7. SRT input --------------------------------------------------------------
+// A web page can't receive SRT (raw UDP). The helper listens for an SRT caller
+// (Larix, vMix, an encoder...), and ffmpeg re-encodes it to H.264 + Opus and
+// publishes it with WHIP to this helper's own /whip-in, which hands it to the
+// studio page exactly like OBS. When the sender stops, ffmpeg exits and the
+// listener starts again, so the sender can reconnect at any time.
+const srt = new Map(); // id -> session
+
+// SRT input needs an ffmpeg with SRT and the WHIP muxer (ffmpeg 8 or later).
+const capsCache = new Map(); // ffmpeg path -> boolean
+function ffmpegCanSrt(ff) {
+  if (!ff) return false;
+  if (!capsCache.has(ff)) {
+    try {
+      const out = (a) => spawnSync(ff, ['-hide_banner', a], { encoding: 'utf8', windowsHide: true, timeout: 10000 }).stdout || '';
+      capsCache.set(ff, /^\s*E?\s+whip\s/m.test(out('-muxers')) && /^\s+srt\s*$/m.test(out('-protocols')));
+    } catch { capsCache.set(ff, false); }
+  }
+  return capsCache.get(ff);
+}
+
+function startSrt({ room, slot, token, port, latency, passphrase, kbps }) {
+  const ff = findFfmpeg();
+  if (!ff) throw Object.assign(new Error('ffmpeg is not installed on this computer. Run the helper installer again, or install ffmpeg.'), { status: 501 });
+  if (!ffmpegCanSrt(ff)) throw Object.assign(new Error('The ffmpeg on this computer is too old for SRT input (it needs SRT and WHIP support, ffmpeg 8 or later). Update it with: winget upgrade Gyan.FFmpeg.Essentials'), { status: 501 });
+  if (!valid(room) || !valid(slot)) throw Object.assign(new Error('bad room or source'), { status: 400 });
+  port = Number(port);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Object.assign(new Error('Pick a port between 1024 and 65535.'), { status: 400 });
+  if (passphrase && (passphrase.length < 10 || passphrase.length > 79)) throw Object.assign(new Error('An SRT passphrase must be 10 to 79 characters.'), { status: 400 });
+  for (const o of srt.values()) {
+    if (o.slot === slot && o.room === room) stopSrt(o);
+    else if (o.port === port) throw Object.assign(new Error(`Port ${port} is already used by another SRT source.`), { status: 409 });
+  }
+  const s = { id: crypto.randomUUID(), room, slot, token: String(token || ''), port, latency: Math.max(20, Math.min(8000, Number(latency) || 200)),
+    passphrase: passphrase || '', kbps: Math.max(500, Math.min(20000, Number(kbps) || 6000)), state: 'listening', input: null, stats: null,
+    errors: [], last: Date.now(), p: null, stopped: false, restarts: 0 };
+  srt.set(s.id, s);
+  runSrt(s);
+  return s;
+}
+
+function runSrt(s) {
+  const ff = findFfmpeg();
+  if (!ff || s.stopped) return;
+  const q = new URLSearchParams({ mode: 'listener', latency: String(s.latency * 1000), transtype: 'live' });
+  if (s.passphrase) { q.set('passphrase', s.passphrase); q.set('pbkeylen', '16'); }
+  const gop = 60;
+  const argv = ['-hide_banner', '-loglevel', 'info', '-stats', '-fflags', '+genpts', '-i', `srt://0.0.0.0:${s.port}?${q}`,
+    '-map', '0:v:0?', '-map', '0:a:0?',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-bf', '0', '-g', String(gop), '-pix_fmt', 'yuv420p',
+    '-b:v', `${s.kbps}k`, '-maxrate', `${s.kbps}k`, '-bufsize', `${s.kbps}k`,
+    '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-b:a', '128k',
+    '-f', 'whip', '-whip_flags', 'dtls_active', '-handshake_timeout', '10000', '-authorization', s.token,
+    `http://127.0.0.1:${PORT}/whip-in/${s.room}/${s.slot}?srt=${s.id}`];
+  const p = spawn(ff, argv, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+  s.p = p; s.state = 'listening'; s.input = null; s.stats = null;
+  let buf = '', inInput = false;
+  p.stderr.on('data', (d) => {
+    buf += d.toString();
+    const lines = buf.split(/\r|\n/); buf = lines.pop();
+    for (const raw of lines) {
+      const l = raw.trim();
+      if (!l) continue;
+      if (/^Input #0/.test(l)) { inInput = true; s.state = 'connecting'; s.input = { video: null, audio: null }; continue; }
+      if (/^Output #0/.test(l)) inInput = false;
+      if (inInput) {
+        const v = /Stream #0:\d+.*?: Video: (\w+).*?(\d{2,5}x\d{2,5})/.exec(l);
+        const fps = /([\d.]+) fps/.exec(l)?.[1];
+        if (v && !s.input.video) s.input.video = `${v[1].toUpperCase()} ${v[2]}${fps ? ` ${Math.round(Number(fps))} fps` : ''}`;
+        const a = /Stream #0:\d+.*?: Audio: (\w+)/.exec(l);
+        if (a && !s.input.audio) s.input.audio = a[1];
+        continue;
+      }
+      if (/time=\s*\S+/.test(l) && /bitrate=/.test(l)) {
+        const f = (k) => (new RegExp(`${k}=\\s*([^\\s]+)`).exec(l) || [])[1];
+        s.state = 'receiving';
+        s.stats = { fps: Number(f('fps')) || 0, time: (f('time') || '').replace(/\.\d+$/, ''), speed: parseFloat(f('speed')) || 0 };
+        continue;
+      }
+      if (!/error|fail|invalid|denied|refused|unable|cannot|could not|unauthori/i.test(l)) continue;
+      s.errors.push(l.replace(/^\[[^\]]*\]\s*/, '')); if (s.errors.length > 8) s.errors.shift();
+    }
+  });
+  p.on('error', (e) => { s.errors.push(e.message); });
+  p.on('exit', (code) => {
+    if (s.p === p) s.p = null;
+    for (const close of s.relays?.splice(0) || []) close();
+    if (s.stopped) return;
+    const was = s.state;
+    s.state = 'listening'; s.stats = null;
+    if (was !== 'listening') log(`SRT ${s.slot} on port ${s.port}: sender gone (ffmpeg exit ${code}) ${s.errors.slice(-2).join(' | ')}; listening again`);
+    // A listener that dies at once (port taken, bad option) would spin: back off.
+    s.restarts = was === 'listening' ? s.restarts + 1 : 0;
+    if (s.restarts > 3) s.state = 'error';
+    setTimeout(() => runSrt(s), Math.min(10000, 500 * 2 ** Math.min(s.restarts, 5)));
+  });
+  log(`SRT ${s.slot}: listening on port ${s.port} (latency ${s.latency} ms${s.passphrase ? ', encrypted' : ''})`);
+}
+
+function stopSrt(s) {
+  if (!s) return;
+  s.stopped = true;
+  srt.delete(s.id);
+  for (const close of s.relays?.splice(0) || []) close();
+  if (s.p) { const p = s.p; p.kill(); setTimeout(() => { if (p.exitCode === null) p.kill('SIGKILL'); }, 3000); }
+  log(`SRT ${s.slot}: stopped listening on port ${s.port}`);
+}
+const srtStatus = (s) => ({ id: s.id, state: s.state, port: s.port, latency: s.latency, encrypted: !!s.passphrase, input: s.input, stats: s.stats,
+  error: s.state === 'error' ? (s.errors.slice(-3).join(' ') || 'ffmpeg could not listen on this port.') : null, lan: lanIPv4() });
+// The page polls while it wants the listener; stop once it has gone away. The
+// limit is generous because browsers slow timers down in background tabs.
+setInterval(() => { for (const s of srt.values()) if (Date.now() - s.last > 150000) { log(`SRT ${s.slot}: studio page gone, stopping`); stopSrt(s); } }, 5000).unref();
+
+async function handleSrt(req, res, parts) {
+  const json = (code, obj) => res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(obj));
+  if (parts.length === 1 && req.method === 'POST') {
+    let body; try { body = JSON.parse(await readBody(req)); } catch { json(400, { error: 'bad json' }); return; }
+    try { json(201, srtStatus(startSrt(body))); } catch (e) { json(e.status || 500, { error: e.message }); }
+    return;
+  }
+  const s = srt.get(parts[1]);
+  if (!s) { json(404, { error: 'This SRT listener has stopped.' }); return; }
+  if (req.method === 'GET') { s.last = Date.now(); json(200, srtStatus(s)); return; }
+  if (req.method === 'DELETE') { stopSrt(s); json(200, { ok: true }); return; }
+  json(405, { error: 'method not allowed' });
+}
+
+// ffmpeg's WHIP muxer stops answering ICE connectivity checks once it is
+// connected, so Chrome's consent checks go unanswered and Chrome drops the
+// connection after about 30 s. For our own ffmpeg, put a small UDP relay in the
+// middle that forwards everything and answers those checks on ffmpeg's behalf.
+const STUN_COOKIE = 0x2112a442;
+const CRC_TABLE = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
+function crc32(buf) { let c = -1; for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; }
+
+function stunBindingResponse(req, pwd, addr, port) {
+  const xport = port ^ (STUN_COOKIE >>> 16);
+  const ip = addr.split('.').map(Number);
+  const cookie = [0x21, 0x12, 0xa4, 0x42];
+  const xma = Buffer.from([0x00, 0x20, 0x00, 0x08, 0x00, 0x01, xport >> 8, xport & 0xff, ...ip.map((b, i) => b ^ cookie[i])]);
+  const head = Buffer.alloc(20);
+  head.writeUInt16BE(0x0101, 0);
+  head.writeUInt32BE(STUN_COOKIE, 4);
+  req.copy(head, 8, 8, 20);
+  // MESSAGE-INTEGRITY covers everything before it, with the length already counting it.
+  head.writeUInt16BE(xma.length + 24, 2);
+  const mi = crypto.createHmac('sha1', pwd).update(Buffer.concat([head, xma])).digest();
+  const miAttr = Buffer.concat([Buffer.from([0x00, 0x08, 0x00, 0x14]), mi]);
+  head.writeUInt16BE(xma.length + 24 + 8, 2);
+  const body = Buffer.concat([head, xma, miAttr]);
+  const fp = Buffer.alloc(8);
+  fp.writeUInt16BE(0x8028, 0); fp.writeUInt16BE(4, 2); fp.writeUInt32BE((crc32(body) ^ 0x5354554e) >>> 0, 4);
+  return Buffer.concat([body, fp]);
+}
+
+// Returns the answer with its candidate pointing at the relay.
+async function relayForFfmpeg(s, offer, answer) {
+  const pwd = /^a=ice-pwd:(\S+)/m.exec(offer)?.[1];
+  const cand = /^(a=candidate:\S+ 1 udp \d+ )(\d+\.\d+\.\d+\.\d+) (\d+)( typ host[^\r\n]*)/im.exec(answer);
+  if (!pwd || !cand) return answer;
+  const browser = { address: cand[2], port: Number(cand[3]) };
+  const sock = dgram.createSocket('udp4');
+  await new Promise((resolve, reject) => { sock.once('error', reject); sock.bind(0, '0.0.0.0', resolve); });
+  sock.removeAllListeners('error');
+  sock.on('error', (e) => log(`SRT ${s.slot}: relay error ${e.message}`));
+  // ffmpeg reaches the relay on 127.0.0.1; everything else is the browser,
+  // which may also check from its other local addresses.
+  let ffmpeg = null;
+  sock.on('message', (msg, from) => {
+    if (from.address === '127.0.0.1') {
+      ffmpeg = { address: from.address, port: from.port };
+      sock.send(msg, browser.port, browser.address);
+      return;
+    }
+    // Binding request from the browser: answer it here (ffmpeg would ignore it).
+    if (msg.length >= 20 && msg.readUInt16BE(0) === 0x0001 && msg.readUInt32BE(4) === STUN_COOKIE) {
+      if (net.isIPv4(from.address)) sock.send(stunBindingResponse(msg, pwd, from.address, from.port), from.port, from.address);
+      return;
+    }
+    if (ffmpeg) sock.send(msg, ffmpeg.port, ffmpeg.address);
+  });
+  const close = () => { try { sock.close(); } catch { /* already closed */ } };
+  s.relays = (s.relays || []).filter((r) => { r(); return false; });
+  s.relays.push(close);
+  const { port } = sock.address();
+  return answer.replace(cand[0], `${cand[1]}127.0.0.1 ${port}${cand[4]}`);
+}
+
 async function handle(req, res) {
   cors(res);
   const url = new URL(req.url, `http://${req.headers.host}`);
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   if (req.method === 'OPTIONS') { res.writeHead(204, parts[0] === 'whip-in' || parts[0] === 'whip-session' ? { 'Accept-Post': 'application/sdp', 'Accept-Patch': 'application/trickle-ice-sdpfrag' } : {}).end(); return; }
   if (parts[0] === 'helper' && parts.length === 1) {
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', features: ['relay', 'forward', 'whip-in', 'whip-test', ...(findFfmpeg() ? ['rtmp'] : [])], lan: lanIPv4(), port: PORT, ffmpeg: !!findFfmpeg() }));
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', features: ['relay', 'forward', 'whip-in', 'whip-test', ...(findFfmpeg() ? ['rtmp'] : []), ...(ffmpegCanSrt(findFfmpeg()) ? ['srt'] : [])], lan: lanIPv4(), port: PORT, ffmpeg: !!findFfmpeg() }));
     return;
   }
 
+  if (parts[0] === 'srt' && (parts.length === 1 || (parts.length === 2 && /^[0-9a-f-]{36}$/.test(parts[1])))) { await handleSrt(req, res, parts); return; }
   if (parts[0] === 'rtmp' && (parts.length === 1 || (parts.length <= 3 && /^[0-9a-f-]{36}$/.test(parts[1])))) { await handleRtmp(req, res, parts); return; }
 
   // 1. Relay: GET = subscribe (Server-Sent Events), POST = send to a peer.
@@ -323,7 +536,7 @@ async function handle(req, res) {
   // 3. WHIP ingest into the studio (OBS etc.). The studio page checks the token.
   if (parts[0] === 'whip-in' && parts.length === 3 && valid(parts[1]) && valid(parts[2]) && req.method === 'POST') {
     const [, room, slot] = parts;
-    const sdp = await readBody(req);
+    const sdp = fixSsrcGroups(await readBody(req));
     log(`WHIP in ${slot} from ${req.socket.remoteAddress} (${req.headers['user-agent'] || '?'}): offer ${candSummary(sdp)}`);
     if (!sdp.startsWith('v=0')) { res.writeHead(400).end('expected an application/sdp offer'); return; }
     const id = `in-${crypto.randomUUID()}`;
@@ -341,10 +554,12 @@ async function handle(req, res) {
     if (reply.type !== 'answer') { log(`  -> ${reply.status || 403} ${reply.reason || 'rejected'}`); res.writeHead(reply.status || 403).end(reply.reason || 'rejected'); return; }
     let answer = await unhideMdns(reply.sdp);
     if (local) answer = onlyLocalHost(answer);
+    const bridge = local && srt.get(url.searchParams.get('srt') || '');
+    if (bridge) answer = await relayForFfmpeg(bridge, sdp, answer);
     log(`  -> 201 answer ${candSummary(answer)}`);
     if (process.env.WHIP_DEBUG) log(`  OFFER:\n${sdp}\n  ANSWER:\n${answer}`);
     sessions.set(id, { room, slot, kind: 'in' });
-    res.writeHead(201, { 'Content-Type': 'application/sdp', ETag: `"${id}"`, 'Accept-Patch': 'application/trickle-ice-sdpfrag', Location: `${url.protocol}//${req.headers.host}/whip-session/${id}` }).end(answer);
+    res.writeHead(201, { 'Content-Type': 'application/sdp', 'Content-Length': Buffer.byteLength(answer), ETag: `"${id}"`, 'Accept-Patch': 'application/trickle-ice-sdpfrag', Location: `${url.protocol}//${req.headers.host}/whip-session/${id}` }).end(answer);
     return;
   }
 
@@ -377,7 +592,7 @@ async function handle(req, res) {
     if (s.kind === 'in') deliver(s.room, 'studio', { from: 'ingest', type: 'whip-bye', slot: s.slot, gen: parts[1] });
     else deliver(s.room, s.peer, { from: 'studio', type: 'bye' });
     sessions.delete(parts[1]);
-    res.writeHead(200).end();
+    res.writeHead(200, { 'Content-Length': 0 }).end();
     return;
   }
 
@@ -404,6 +619,7 @@ http.createServer((req, res) => handle(req, res).catch((e) => { try { res.writeH
     console.log(`  forwarder: /forward?target=<url>   (allowed hosts: ${FORWARD_ALLOW.join(', ')})`);
     console.log(`  WHIP in:   /whip-in/<room>/<source>   (OBS -> studio)`);
     console.log(`  WHIP sink: /whip/<room>/<output>`);
+    console.log('  SRT in:    /srt    (listeners started from the studio page)');
     console.log(`  RTMP out:  /rtmp   (ffmpeg: ${findFfmpeg() || 'not found'})`);
     if (STATIC) console.log(`  static:    ${path.resolve(STATIC)}`);
   });

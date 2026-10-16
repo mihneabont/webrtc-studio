@@ -84,8 +84,10 @@ app.detectHelper = async () => {
   return null;
 };
 app.detectHelper();
-// RTMP output goes through the helper: the one found above, or the configured relay.
+// RTMP output and SRT input go through the helper: the one found above, or the
+// configured relay.
 outputs.helper = () => app.helperOrigin || store.ws.settings.signalingUrl || null;
+sources.helper = outputs.helper;
 
 // --- UI --------------------------------------------------------------------
 mountMonitors(app, $('#monitors'));
