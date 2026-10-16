@@ -73,7 +73,6 @@ export class Store {
   exportJson() {
     const copy = JSON.parse(JSON.stringify(this.ws));
     for (const o of copy.outputs) delete o.secret; // never export credentials
-    delete copy.settings.linkEmail; // personal, stays in this browser
     return JSON.stringify(copy, null, 2);
   }
 

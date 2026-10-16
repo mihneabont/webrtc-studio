@@ -2,7 +2,7 @@
 import { el, fmtKbps, fmtRes, fmtMs, uid } from '../util.js';
 import { SOURCE_STATES, stateLabel } from '../sources.js';
 import { codecSupported } from '../rtc.js';
-import { field, text, select, check, linkBox, sendLinkRow, statLine, CardList } from './forms.js';
+import { field, text, select, check, linkBox, statLine, CardList } from './forms.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
 import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
@@ -109,7 +109,7 @@ function mountSourcesTab(app, root) {
           cards.refresh(s);
         } }, 'Connect');
         ta.addEventListener('paste', () => setTimeout(() => accept.click(), 50));
-        actions.push(el('div', { class: 'small muted' }, '1. Send this invite link to the contributor:'), linkBox(s.invite.link, 'Copy link'), sendLinkRow(s.invite.link, store),
+        actions.push(el('div', { class: 'small muted' }, '1. Send this invite link to the contributor:'), linkBox(s.invite.link, 'Copy link'),
           el('div', { class: 'small muted' }, '2. Paste the reply code they send back:'), ta, el('div', { class: 'btn-row' }, accept,
             el('button', { class: 'btn', onclick: () => invite(s) }, 'New invite'), el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Cancel')));
       } else {
@@ -120,7 +120,7 @@ function mountSourcesTab(app, root) {
     } else if (s.cfg.kind === 'obs') {
       actions.push(...obsActions(s, live));
     } else if (s.cfg.kind === 'peer') {
-      actions.push(el('div', { class: 'small muted' }, 'Contributor link (reusable; reconnects automatically):'), linkBox(sources.relayLink(s.id), 'Copy link'), sendLinkRow(sources.relayLink(s.id), store),
+      actions.push(el('div', { class: 'small muted' }, 'Contributor link (reusable; reconnects automatically):'), linkBox(sources.relayLink(s.id), 'Copy link'),
         el('div', { class: 'btn-row' },
           el('button', { class: 'btn primary', onclick: () => sources.reconnect(s.id) }, 'Reconnect'),
           live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));

@@ -52,24 +52,6 @@ export function linkBox(value, label = 'Copy') {
   return el('div', { class: 'linkbox' }, i, b);
 }
 
-// Gets a contributor link onto a phone: email it (Gmail in the browser, or the
-// computer's mail app) or use the system share sheet. The address is
-// remembered in this browser only.
-export function sendLinkRow(link, store, subject = 'WebRTC Studio: join as a camera') {
-  const st = store.ws.settings;
-  const email = el('input', { type: 'email', placeholder: 'Your email (on the phone)', value: st.linkEmail || '', autocomplete: 'email' });
-  email.addEventListener('change', () => { st.linkEmail = email.value.trim(); store.save(); });
-  const to = () => { st.linkEmail = email.value.trim(); store.save(); return st.linkEmail; };
-  const body = `Open this link on the phone to join the studio as a camera:\n\n${link}\n`;
-  const q = (o) => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-  const gmail = el('a', { class: 'btn sm primary', target: '_blank', rel: 'noopener', title: 'Opens a ready-to-send Gmail message in a new tab',
-    onclick: () => { gmail.href = `https://mail.google.com/mail/?view=cm&fs=1&${q({ to: to(), su: subject, body })}`; } }, 'Email with Gmail');
-  const mail = el('a', { class: 'btn sm', title: 'Opens your mail app (Outlook, Mail…)',
-    onclick: () => { mail.href = `mailto:${encodeURIComponent(to())}?${q({ subject, body })}`; } }, 'Mail app');
-  const share = navigator.share ? el('button', { class: 'btn sm', onclick: () => navigator.share({ title: subject, text: 'Join the studio as a camera:', url: link }).catch(() => {}) }, 'Share…') : null;
-  return el('div', { class: 'linkbox sendlink' }, email, gmail, mail, share);
-}
-
 export function statLine(pairs) {
   return el('div', { class: 'statline' }, pairs.filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== '–')
     .map(([k, v]) => el('span', {}, el('em', {}, k), v)));
