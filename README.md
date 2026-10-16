@@ -14,18 +14,23 @@ what that constraint costs and the optional helpers that soften it, and
 
 ## Run it
 
-Serve the folder from any static host over HTTPS (GitHub Pages, Netlify,
-Cloudflare Pages, S3, nginx). Browsers only allow WebRTC capture on HTTPS or
-`localhost`.
+Open **https://mihneabont.github.io/webrtc-studio/** in Chrome or Edge. Browsers
+only allow camera capture on HTTPS or `localhost`, so the pages are hosted
+rather than opened from disk. Any static host works the same way.
 
-Locally:
+Phones and laptops join as cameras by opening `contribute.html` from an invite
+link. OBS on the studio computer can also join through OBS Virtual Camera.
 
-```sh
-python3 -m http.server 8080          # then open http://localhost:8080
-# or, with the optional helper (needed for OBS input; adds the relay,
-# WHIP ingest and a WHIP test sink, and serves the app too):
-node signaling-server/server.mjs --static . --port 8787
-```
+To send from OBS or Larix directly (WHIP), the studio needs the small optional
+helper running on the studio computer. Add an "OBS / WHIP encoder" source and
+click **Install helper (Windows)**: the downloaded setup file installs Node.js
+if needed, runs the helper in the background on port 8788 (and at every
+sign-in), and adds local-network firewall rules after one admin prompt. Run it
+with `/uninstall` to remove it. On macOS or Linux:
+`node signaling-server/server.mjs --port 8788`.
+
+Locally, without hosting: `node signaling-server/server.mjs --static . --port 8787`
+serves the app and the helper together.
 
 Use a current Chrome or Edge for the studio (H.264 encoding is needed for
 Twitch). Contributors and receivers can use any current desktop or mobile
