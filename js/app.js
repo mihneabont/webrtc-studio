@@ -54,9 +54,25 @@ app.setupRelay();
 
 // If this page is served by the optional helper, remember its address so the
 // UI can offer it (OBS/WHIP ingest needs it). Nothing is enabled automatically.
-fetch(new URL('helper', location.href)).then((r) => (r.ok ? r.json() : null)).then((info) => {
-  if (info?.app === 'webrtc-studio-helper') { app.helperOrigin = location.origin; app.ui.emit('settings'); }
-}).catch(() => {});
+// Otherwise look for one running on this computer (installed from the OBS
+// source card), so the page can be hosted anywhere.
+const HELPER_PORTS = [8787, 8788];
+app.detectHelper = async () => {
+  const bases = [new URL('.', location.href).href.replace(/\/$/, ''), ...HELPER_PORTS.map((p) => `http://localhost:${p}`)];
+  for (const base of bases) {
+    try {
+      const r = await fetch(`${base}/helper`, { cache: 'no-store' });
+      const info = r.ok ? await r.json() : null;
+      if (info?.app === 'webrtc-studio-helper') {
+        app.helperOrigin = base === bases[0] ? location.origin : base;
+        app.ui.emit('settings');
+        return app.helperOrigin;
+      }
+    } catch { /* not there */ }
+  }
+  return null;
+};
+app.detectHelper();
 
 // --- UI --------------------------------------------------------------------
 mountMonitors(app, $('#monitors'));

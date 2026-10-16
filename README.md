@@ -14,17 +14,18 @@ what that constraint costs and the optional helpers that soften it, and
 
 ## Run it
 
-Open **https://mihneabont.github.io/webrtc-studio/** (GitHub Pages; nothing runs
-there but these files). Browsers only allow camera capture on HTTPS or
-`localhost`, which is why the pages are hosted rather than opened from disk.
+Serve the folder from any static host over HTTPS (GitHub Pages, Netlify,
+Cloudflare Pages, S3, nginx). Browsers only allow WebRTC capture on HTTPS or
+`localhost`.
 
-Locally, any static file server works: `python3 -m http.server 8080`, then open
-http://localhost:8080.
+Locally:
 
-Inputs are browser cameras: phones and laptops open `contribute.html` from an
-invite link. OBS can join through OBS Virtual Camera, picked as a camera on the
-studio's own machine. Encoders that push WHIP, SRT or RTMP need a server and are
-not supported.
+```sh
+python3 -m http.server 8080          # then open http://localhost:8080
+# or, with the optional helper (needed for OBS input; adds the relay,
+# WHIP ingest and a WHIP test sink, and serves the app too):
+node signaling-server/server.mjs --static . --port 8787
+```
 
 Use a current Chrome or Edge for the studio (H.264 encoding is needed for
 Twitch). Contributors and receivers can use any current desktop or mobile

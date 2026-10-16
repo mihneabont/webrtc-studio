@@ -146,6 +146,47 @@ function mountSourcesTab(app, root) {
       head, state, detail, err, stats, ...actions, settings);
   });
 
+  // A web page can't install software, so this hands the user a setup file
+  // that installs Node.js if needed, fetches the helper from the site this
+  // page came from, and starts it on port 8787.
+  function downloadHelperInstaller() {
+    const src = new URL('signaling-server/server.mjs', location.href).href;
+    const cmd = [
+      '@echo off',
+      'title WebRTC Studio helper',
+      'setlocal',
+      'set "DIR=%LOCALAPPDATA%\\WebRTCStudioHelper"',
+      'set "NODE=node"',
+      'where node >nul 2>nul && goto havenode',
+      'set "NODE=%ProgramFiles%\\nodejs\\node.exe"',
+      'if exist "%NODE%" goto havenode',
+      'echo Installing Node.js LTS. Windows may ask for permission...',
+      'winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements',
+      'if exist "%NODE%" goto havenode',
+      'echo Node.js did not install. Install it from https://nodejs.org and run this file again.',
+      'pause',
+      'exit /b 1',
+      ':havenode',
+      'if not exist "%DIR%" mkdir "%DIR%"',
+      `echo Downloading the helper from ${src}`,
+      `powershell -NoProfile -Command "Invoke-WebRequest -UseBasicParsing '${src}' -OutFile '%DIR%\\server.mjs'"`,
+      'if not exist "%DIR%\\server.mjs" (',
+      '  echo Download failed.',
+      '  pause',
+      '  exit /b 1',
+      ')',
+      '> "%DIR%\\start-helper.cmd" echo @"%NODE%" "%DIR%\\server.mjs" --port 8787',
+      'echo.',
+      'echo The helper is running on http://localhost:8787. Keep this window open while you use the studio.',
+      'echo To start it again later, run %DIR%\\start-helper.cmd',
+      'echo.',
+      '"%NODE%" "%DIR%\\server.mjs" --port 8787',
+      'pause',
+    ].join('\r\n') + '\r\n';
+    const a = el('a', { href: URL.createObjectURL(new Blob([cmd], { type: 'application/octet-stream' })), download: 'webrtc-studio-helper-setup.cmd' });
+    document.body.append(a); a.click(); a.remove();
+  }
+
   function obsActions(s, live) {
     const st = store.ws.settings;
     if (!st.signalingUrl) {
@@ -157,7 +198,16 @@ function mountSourcesTab(app, root) {
         ? el('div', { class: 'btn-row' }, el('button', { class: 'btn primary', onclick: () => {
           st.signalingUrl = helper; store.save(); app.setupRelay(); app.ui.emit('settings');
         } }, `Use the helper at ${helper}`))
-        : el('div', { class: 'small muted' }, 'Start it with: node signaling-server/server.mjs --static . and open the studio from the address it prints, or enter its address under Settings → Signaling relay URL.')];
+        : el('div', {},
+          el('div', { class: 'btn-row' },
+            el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
+            el('button', { class: 'btn', onclick: async (e) => {
+              e.target.textContent = 'Looking…';
+              if (!(await app.detectHelper())) { e.target.textContent = 'Not found. Check again'; }
+            } }, 'Check again')),
+          el('div', { class: 'small muted' },
+            'Downloads a small setup file. Run it (Windows may ask to confirm, and to install Node.js the first time); it starts the helper on this computer at port 8787. Keep its window open, then click Check again. ',
+            'On macOS or Linux: install Node.js and run node signaling-server/server.mjs --port 8787.'))];
     }
     return [
       el('div', { class: 'small muted' }, 'In OBS: Settings → Stream → Service: WHIP. Paste these two values:'),

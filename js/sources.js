@@ -24,6 +24,29 @@ export function stateLabel(s) {
   return SOURCE_STATES[s.state] || s.state;
 }
 
+// Describes the offered media our answer rejected (port 0), e.g.
+// 'video (H.264 High, 64001f)', or null if everything was accepted. Firefox,
+// for example, only receives H.264 Constrained Baseline.
+const H264_PROFILES = { 42: 'Baseline', '4d': 'Main', 58: 'Extended', 64: 'High' };
+function mediaSections(sdp) {
+  return (sdp || '').split(/\r?\nm=/).slice(1).map((sec) => {
+    const [, kind, port, pts] = /^(\w+) (\d+) \S+ ?([\d ]*)/.exec(sec) || [];
+    const pt = (pts || '').split(' ')[0];
+    const codec = new RegExp(`a=rtpmap:${pt} ([\\w-]+)/`).exec(sec)?.[1];
+    const plid = new RegExp(`a=fmtp:${pt} .*profile-level-id=([0-9a-f]{6})`, 'i').exec(sec)?.[1]?.toLowerCase();
+    return { kind, port: Number(port), codec, plid };
+  });
+}
+function rejectedMedia(offer, answer) {
+  const off = mediaSections(offer), ans = mediaSections(answer);
+  const bad = off.filter((o, i) => o.port !== 0 && ans[i]?.port === 0);
+  if (!bad.length) return null;
+  return bad.map((o) => {
+    const prof = o.codec === 'H264' && o.plid ? `H.264 ${H264_PROFILES[o.plid.slice(0, 2)] || 'profile'}, ${o.plid}` : o.codec;
+    return `${o.kind}${prof ? ` (${prof})` : ''}`;
+  }).join(' and ');
+}
+
 export class SourceManager extends Emitter {
   constructor(store) {
     super();
@@ -280,6 +303,18 @@ export class SourceManager extends Emitter {
       if (s && s.whipGen === m.gen) { this._teardown(s, 'bye'); this._set(s, 'ended', 'The encoder stopped streaming.'); }
       return;
     }
+    if (m.type === 'whip-trickle') {
+      if (!s?.pc || s.whipGen !== m.gen) return;
+      let mid = null;
+      for (const line of String(m.frag || '').split(/\r?\n/)) {
+        if (line.startsWith('a=mid:')) mid = line.slice(6).trim();
+        else if (line.startsWith('a=candidate:')) {
+          s.pc.addIceCandidate({ candidate: line.slice(2).trim(), sdpMid: mid ?? s.pc.getTransceivers()[0]?.mid ?? '0' })
+            .catch((e) => console.warn('encoder candidate rejected', e));
+        }
+      }
+      return;
+    }
     if (m.type !== 'whip-offer') return;
     if (!s || s.cfg.kind !== 'obs') return reply({ type: 'reject', status: 404, reason: 'No such source in the studio. Copy the server URL again.' });
     if ((m.auth || '').replace(/^Bearer\s+/i, '') !== s.cfg.token) {
@@ -293,9 +328,24 @@ export class SourceManager extends Emitter {
       this._set(s, 'connecting', 'Encoder connected. Negotiating media…');
       await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
       for (const t of pc.getTransceivers()) t.direction = 'recvonly';
-      await pc.setLocalDescription(await pc.createAnswer());
+      const answer = await pc.createAnswer();
+      // Encoder on the studio's own machine (OBS): let it start the DTLS
+      // handshake. Chrome as DTLS client sends a large (post-quantum) hello
+      // that OBS's DTLS stack fails on at once; as server it follows OBS.
+      if (m.local) answer.sdp = answer.sdp.replace(/^a=setup:active/gm, 'a=setup:passive');
+      await pc.setLocalDescription(answer);
+      const rejected = rejectedMedia(m.sdp, pc.localDescription.sdp);
+      if (rejected) {
+        const reason = `This browser can't receive the encoder's ${rejected}. Use Chrome or Edge for the studio, or set the encoder to H.264 Baseline.`;
+        this._teardown(s, 'rejected');
+        this._set(s, 'failed', reason);
+        return reply({ type: 'reject', status: 415, reason });
+      }
       await waitForIceGathering(pc, 3000);
-      if (s.gen !== gen) return reply({ type: 'reject', status: 409, reason: 'Superseded by a newer connection.' });
+      if (s.gen !== gen) {
+        if (s.whipGen === m.gen) this._set(s, 'waiting', 'The encoder connection was replaced. Waiting for the encoder…');
+        return reply({ type: 'reject', status: 409, reason: 'Superseded by a newer connection.' });
+      }
       const c = sdpCodecs(pc.localDescription.sdp);
       reply({ type: 'answer', sdp: pc.localDescription.sdp });
       this._set(s, 'connecting', `Encoder offer accepted (video ${c.video || 'none'}, audio ${c.audio || 'none'}). Connecting media…`);
