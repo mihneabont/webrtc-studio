@@ -1,5 +1,5 @@
 // Outputs tab: programme format, receivers, WHIP and Twitch outputs.
-import { el, fmtKbps, fmtRes, fmtMs } from '../util.js';
+import { el, fmtKbps, fmtRes, fmtMs, relayWorksRemotely } from '../util.js';
 import { OUTPUT_STATES, TWITCH, defaultKbps, rtmpFormat } from '../outputs.js';
 import { downloadHelperInstaller } from './helper-install.js';
 import { sealSecret, openSecret } from '../store.js';
@@ -90,7 +90,7 @@ export function mountOutputsTab(app, root, setBadge) {
       parts.push(el('details', {}, el('summary', {}, 'Output settings'), el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
         field('Name', text(o.cfg.name, (v) => outputs.update(o.id, { name: v }))), bitrate,
         field('Video codec', select(CODECS, o.cfg.codec, (v) => outputs.update(o.id, { codec: v })), 'Applies on next start.'),
-        store.ws.settings.signalingUrl ? field('Signaling', select({ manual: 'Copy-paste codes', relay: 'Signaling relay' }, o.cfg.mode, (v) => { outputs.stop(o.id, true); outputs.update(o.id, { mode: v }); cards.refresh(o); })) : null,
+        relayWorksRemotely(store.ws.settings.signalingUrl) ? field('Signaling', select({ manual: 'Copy-paste codes', relay: 'Signaling relay' }, o.cfg.mode, (v) => { outputs.stop(o.id, true); outputs.update(o.id, { mode: v }); cards.refresh(o); })) : null,
         removeBtn(o))));
       return el('div', { class: `card ${o.state === 'live' ? 'live' : o.state === 'failed' ? 'failed' : ''}` }, ...parts);
     }

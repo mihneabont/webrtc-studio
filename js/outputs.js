@@ -8,7 +8,7 @@
 //              speak RTMP, so the programme is recorded here (MediaRecorder)
 //              and handed to the optional helper on this computer, whose
 //              ffmpeg pushes it on. Not WebRTC; adds a second or two of delay.
-import { Emitter, uid } from './util.js';
+import { Emitter, uid, relayWorksRemotely } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
 import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whipPublish, httpTeardown, preferCodec, codecSupported, sdpCodecs, HttpSignalError } from './rtc.js';
 
@@ -77,7 +77,7 @@ export class OutputManager extends Emitter {
     const h = this.ws.settings.format.height;
     const cfg = {
       id: uid(4), kind, name: name || (kind === 'twitch' ? 'Twitch' : kind === 'whip' ? 'WHIP output' : kind === 'rtmp' ? 'RTMP output' : `Receiver ${this.ws.outputs.length + 1}`),
-      mode: this.ws.settings.signalingUrl ? 'relay' : 'manual',
+      mode: relayWorksRemotely(this.ws.settings.signalingUrl) ? 'relay' : 'manual',
       url: kind === 'twitch' ? TWITCH.url : url,
       maxKbps: kind === 'twitch' ? Math.min(TWITCH.defaultKbps, defaultKbps(h)) : defaultKbps(h),
       codec: kind === 'twitch' ? 'h264' : 'auto',

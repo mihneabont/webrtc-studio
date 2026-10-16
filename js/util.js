@@ -1,5 +1,16 @@
 // Small shared helpers. No dependencies.
 
+// Can a phone or another computer use this relay for contributor/receiver
+// links? Not a helper on localhost (that's the phone itself there), and not
+// plain http from a secure page (browsers block it).
+export function relayWorksRemotely(url) {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && !/^(localhost|127\.|\[::1\])/.test(u.hostname);
+  } catch { return false; }
+}
+
 export function uid(bytes = 6) {
   const a = crypto.getRandomValues(new Uint8Array(bytes));
   return Array.from(a, (b) => b.toString(16).padStart(2, '0')).join('');

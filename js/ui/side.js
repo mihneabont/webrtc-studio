@@ -1,5 +1,5 @@
 // Right-hand side panel: Sources, Scenes, Graphics, Outputs, Settings.
-import { el, fmtKbps, fmtRes, fmtMs, uid } from '../util.js';
+import { el, fmtKbps, fmtRes, fmtMs, uid, relayWorksRemotely } from '../util.js';
 import { SOURCE_STATES, stateLabel } from '../sources.js';
 import { codecSupported } from '../rtc.js';
 import { field, text, select, check, linkBox, statLine, CardList } from './forms.js';
@@ -67,7 +67,7 @@ function mountSourcesTab(app, root) {
     list);
 
   function renderIntro() {
-    intro.replaceChildren(store.ws.settings.signalingUrl
+    intro.replaceChildren(relayWorksRemotely(store.ws.settings.signalingUrl)
       ? 'Contributor sources use the optional signaling relay: send the contributor their link once; it reconnects automatically.'
       : 'No server needed: each contributor gets an invite link, and sends back a reply code you paste here. Media flows directly between browsers. (Optional: configure a signaling relay in Settings for automatic reconnection.)');
   }
@@ -133,7 +133,7 @@ function mountSourcesTab(app, root) {
         live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
     }
 
-    const modeOpts = store.ws.settings.signalingUrl && s.cfg.kind === 'peer'
+    const modeOpts = relayWorksRemotely(store.ws.settings.signalingUrl) && s.cfg.kind === 'peer'
       ? field('Signaling', select({ manual: 'Copy-paste codes', relay: 'Signaling relay' }, s.cfg.mode, (v) => { sources.disconnect(s.id); sources.update(s.id, { mode: v }); }))
       : null;
     const settings = el('details', {}, el('summary', {}, 'Source settings'),

@@ -4,7 +4,7 @@
 //  - "whep": pull from any WHEP endpoint (an external WebRTC server/encoder).
 // Every source has its own RTCPeerConnection, so one failing never affects
 // the others.
-import { Emitter, uid } from './util.js';
+import { Emitter, uid, relayWorksRemotely } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
 import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whepSubscribe, httpTeardown, sdpCodecs } from './rtc.js';
 
@@ -78,7 +78,7 @@ export class SourceManager extends Emitter {
   add({ name, kind = 'peer', mode, whepUrl = '' }) {
     const cfg = {
       id: uid(4), name: name || `Source ${this.ws.sources.length + 1}`, kind,
-      mode: mode || (this.ws.settings.signalingUrl ? 'relay' : 'manual'), whepUrl,
+      mode: mode || (relayWorksRemotely(this.ws.settings.signalingUrl) ? 'relay' : 'manual'), whepUrl,
     };
     if (kind === 'obs') { cfg.mode = 'relay'; cfg.token = uid(12); }
     this.ws.sources.push(cfg);

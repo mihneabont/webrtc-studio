@@ -18,7 +18,7 @@
     {
       "name": "Source stats come from getStats (resolution, fps, bitrate)",
       "ok": true,
-      "info": "[{\"n\":\"Camera A\",\"w\":640,\"h\":360,\"fps\":18,\"kbps\":null,\"codec\":\"VP8\",\"audio\":true},{\"n\":\"Camera B\",\"w\":640,\"h\":360,\"fps\":17,\"kbps\":null,\"codec\":\"VP8\",\"audio\":true}]"
+      "info": "[{\"n\":\"Camera A\",\"w\":960,\"h\":540,\"fps\":20,\"kbps\":null,\"codec\":\"VP8\",\"audio\":true},{\"n\":\"Camera B\",\"w\":640,\"h\":360,\"fps\":16,\"kbps\":null,\"codec\":\"VP8\",\"audio\":true}]"
     },
     {
       "name": "Both sources visible simultaneously in multiview",
@@ -53,7 +53,7 @@
     {
       "name": "Audio from both sources reaches the programme mix",
       "ok": true,
-      "info": "{\"ch\":{\"5a840d2e\":0,\"db8a977f\":0},\"master\":0}"
+      "info": "{\"ch\":{\"ea4edb02\":0,\"bf7d4b1b\":0},\"master\":0}"
     },
     {
       "name": "Mute silences a channel",
@@ -68,7 +68,7 @@
     {
       "name": "Remote receiver gets composed video and mixed audio",
       "ok": true,
-      "info": "{\"w\":1280,\"h\":720,\"videoFrames\":32,\"audioBytes\":30387,\"energy\":0}"
+      "info": "{\"w\":1280,\"h\":720,\"videoFrames\":31,\"audioBytes\":24434,\"energy\":0}"
     },
     {
       "name": "Received video shows the composition background",
@@ -88,12 +88,12 @@
     {
       "name": "Fade to black appears in the outgoing stream",
       "ok": true,
-      "info": "rgb 1,1,1"
+      "info": "rgb 2,2,2"
     },
     {
       "name": "Output statistics reported",
       "ok": true,
-      "info": "{\"w\":1280,\"fps\":10,\"kbps\":302,\"codec\":\"VP8\"}"
+      "info": "{\"w\":1280,\"fps\":10,\"kbps\":164,\"codec\":\"VP8\"}"
     },
     {
       "name": "WHIP output: POST offer, 201 + Location, media connects",

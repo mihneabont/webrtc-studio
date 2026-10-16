@@ -8,7 +8,7 @@ import { Switcher } from './switcher.js';
 import { Compositor } from './compositor.js';
 import { OutputManager } from './outputs.js';
 import { Relay } from './relay.js';
-import { Emitter, el, $ } from './util.js';
+import { Emitter, el, $, relayWorksRemotely } from './util.js';
 import { mountMonitors } from './ui/monitors.js';
 import { mountMultiview } from './ui/multiview.js';
 import { mountMixer } from './ui/mixer.js';
@@ -41,6 +41,15 @@ app.setupRelay = () => {
   app.relay?.close();
   app.relay = null;
   const st = store.ws.settings;
+  // Contributor and receiver links go to other devices. A local helper can't
+  // carry them (it serves OBS and RTMP only), so those use copy-paste codes.
+  if (!relayWorksRemotely(st.signalingUrl)) {
+    let changed = false;
+    for (const c of [...store.ws.sources, ...store.ws.outputs]) {
+      if ((c.kind || 'peer') === 'peer' && c.mode === 'relay') { c.mode = 'manual'; changed = true; }
+    }
+    if (changed) store.save();
+  }
   if (st.signalingUrl) {
     app.relay = new Relay(st.signalingUrl, st.room, 'studio');
     app.relay.on('state', () => app.ui.emit('relay'));
