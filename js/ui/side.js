@@ -235,6 +235,15 @@ function mountSourcesTab(app, root) {
             'Downloads a small setup file. Run it once: it installs Node.js if needed, starts the helper in the background on this computer and again at every sign-in, and asks once for admin so your phone and OBS on this network can connect. Then click Check again. ',
             `On macOS or Linux: install Node.js and run node signaling-server/server.mjs --port ${HELPER_PORT}.`))];
     }
+    if (app.relay?.state !== 'open') {
+      return [el('div', { class: 'note warn' }, `Can't reach the helper at ${st.signalingUrl}. It may not be running, or it was removed.`),
+        el('div', { class: 'btn-row' },
+          el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
+          el('button', { class: 'btn', onclick: () => app.setupRelay() }, 'Check again'),
+          el('button', { class: 'btn', title: 'Stop using this helper address', onclick: () => {
+            st.signalingUrl = ''; store.save(); app.helperOrigin = null; app.setupRelay(); app.ui.emit('settings'); app.detectHelper();
+          } }, 'Forget helper'))];
+    }
     return [
       el('div', { class: 'small muted' }, 'In OBS: Settings → Stream → Service: WHIP. Paste these two values:'),
       field('Server', linkBox(sources.obsUrl(s.id), 'Copy')),
@@ -273,6 +282,7 @@ function mountSourcesTab(app, root) {
   });
   switcher.on('change', () => { for (const s of sources.all()) cards.refresh(s); });
   app.ui.on('settings', renderAll);
+  app.ui.on('relay', renderAll);
   renderAll();
 }
 
