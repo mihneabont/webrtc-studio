@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contribute · WebRTC Studio</title>
+  <link rel="stylesheet" href="css/studio.css">
+  <link rel="stylesheet" href="css/remote.css">
+</head>
+<body class="remote">
+  <header class="topbar"><div class="brand"><span class="brand-dot"></span>WebRTC Studio · Contributor</div><span id="who" class="muted"></span></header>
+  <main class="remote-main">
+    <div class="remote-video" id="frame">
+      <video id="self" muted playsinline autoplay></video>
+      <div class="tally-badge" id="tally"></div>
+      <div class="remote-stats mono" id="stats"></div>
+    </div>
+    <div class="remote-side">
+      <div class="card">
+        <div class="card-head"><span class="dot" id="dot"></span><span class="card-title" id="state">Getting ready</span></div>
+        <div class="card-detail" id="detail"></div>
+      </div>
+      <div class="card">
+        <label class="field">Camera / video
+          <select id="vsel"></select></label>
+        <label class="field">Microphone / audio
+          <select id="asel"></select></label>
+        <div class="grid2">
+          <label class="field">Quality
+            <select id="qsel">
+              <option value="1920x1080x30">1080p 30</option>
+              <option value="1920x1080x60">1080p 60</option>
+              <option value="1280x720x30" selected>720p 30</option>
+              <option value="854x480x30">480p 30</option>
+            </select></label>
+          <label class="field">Max bitrate (kb/s)
+            <input id="bitrate" type="number" value="4000" min="300" step="100"></label>
+        </div>
+        <div class="btn-row">
+          <button class="btn live" id="go">Join studio</button>
+          <button class="btn danger hidden" id="stop">Leave</button>
+        </div>
+      </div>
+      <div class="card hidden" id="replyCard">
+        <div class="small muted">Send this reply code back to the studio operator (chat, email…). It contains only connection details, no media.</div>
+        <textarea id="reply" rows="5" readonly></textarea>
+        <div class="btn-row"><button class="btn primary" id="copy">Copy reply code</button><span class="small muted" id="copied"></span></div>
+      </div>
+      <div class="note small" id="help"></div>
+    </div>
+  </main>
+  <script type="module" src="js/contribute.js"></script>
+</body>
+</html>

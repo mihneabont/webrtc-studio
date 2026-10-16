@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Programme receiver · WebRTC Studio</title>
+  <link rel="stylesheet" href="css/studio.css">
+  <link rel="stylesheet" href="css/remote.css">
+</head>
+<body class="remote">
+  <header class="topbar"><div class="brand"><span class="brand-dot"></span>WebRTC Studio · Programme receiver</div><span id="who" class="muted"></span></header>
+  <main class="remote-main">
+    <div class="remote-video" id="frame">
+      <video id="pgm" playsinline autoplay muted></video>
+      <button class="btn primary overlay-btn hidden" id="unmute">Click to turn sound on</button>
+      <div class="remote-stats mono" id="stats"></div>
+    </div>
+    <div class="remote-side">
+      <div class="card">
+        <div class="card-head"><span class="dot" id="dot"></span><span class="card-title" id="state">Getting ready</span></div>
+        <div class="card-detail" id="detail"></div>
+        <div class="btn-row">
+          <button class="btn" id="fs">Full screen</button>
+          <button class="btn" id="mute">Mute</button>
+        </div>
+      </div>
+      <div class="card hidden" id="replyCard">
+        <div class="small muted">Send this reply code back to the studio operator. It contains only connection details.</div>
+        <textarea id="reply" rows="5" readonly></textarea>
+        <div class="btn-row"><button class="btn primary" id="copy">Copy reply code</button><span class="small muted" id="copied"></span></div>
+      </div>
+      <dl class="kv card" id="kv"></dl>
+    </div>
+  </main>
+  <script type="module" src="js/receive.js"></script>
+</body>
+</html>

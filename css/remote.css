@@ -1,0 +1,17 @@
+body.remote { min-height: 100%; }
+.remote-main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; padding: 12px; }
+.remote-video { position: relative; background: #000; border: 4px solid #2a2f3a; border-radius: 8px; aspect-ratio: 16 / 9; overflow: hidden; }
+.remote-video video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.remote-video.pgm { border-color: var(--pgm); }
+.remote-video.pvw { border-color: var(--pvw); }
+.remote-video:fullscreen { border: 0; border-radius: 0; }
+.tally-badge { position: absolute; top: 10px; left: 10px; font-weight: 800; letter-spacing: .1em; padding: 4px 10px; border-radius: 4px; display: none; }
+.remote-video.pgm .tally-badge { display: block; background: var(--pgm); color: #fff; }
+.remote-video.pvw .tally-badge { display: block; background: var(--pvw); color: #04140b; }
+.remote-stats { position: absolute; bottom: 0; left: 0; right: 0; padding: 6px 10px; font-size: 11px; background: linear-gradient(#0000, #000b); display: flex; gap: 12px; flex-wrap: wrap; }
+.remote-side { display: flex; flex-direction: column; gap: 10px; }
+.remote .card { gap: 8px; }
+.overlay-btn { position: absolute; inset: 0; margin: auto; width: max-content; height: max-content; font-size: 16px; padding: 12px 22px; }
+@media (max-width: 900px) {
+  .remote-main { grid-template-columns: 1fr; padding: 8px; }
+}
