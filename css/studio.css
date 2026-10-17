@@ -250,3 +250,16 @@ details[open] summary { margin-bottom: 6px; }
 @media (max-width: 1500px) {
   .layout { grid-template-columns: minmax(0, 1fr) 360px; }
 }
+
+/* ---------- add source: type picker ---------- */
+.add-source { display: flex; flex-direction: column; gap: 8px; }
+.kind-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.kind-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px;
+  background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: var(--radius);
+  color: var(--muted); font: inherit; font-size: 11px; line-height: 1.2; text-align: center; cursor: pointer;
+}
+.kind-btn:hover { color: var(--text); border-color: var(--faint); }
+.kind-btn.on { color: #fff; background: #13233d; border-color: var(--blue); }
+.kind-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.add-source .btn-row input { flex: 1; min-width: 0; }

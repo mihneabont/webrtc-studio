@@ -23,7 +23,7 @@ check('Studio detects the helper it is served from', true);
 
 // Add the source through the UI, then use the "Use the helper" button.
 await studio.fill('input[placeholder^="Source name"]', 'OBS');
-await studio.selectOption('.tab-body:not(.hidden) select', 'obs');
+await studio.click('.kind-btn[data-kind="obs"]');
 await studio.click('button:has-text("Add")');
 await studio.click('button:has-text("Use the helper at")');
 await until(() => studio.evaluate(() => window.studio.relay?.state === 'open'));

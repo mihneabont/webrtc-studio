@@ -44,15 +44,40 @@ export function mountSide(app, root) {
 }
 
 // ---------------------------------------------------------------------------
+// Source types offered in the Sources tab, in this order. Icons are 24x24 line
+// drawings (SVG path data), drawn in the text colour.
+const SOURCE_KINDS = {
+  peer: { label: 'Invite link', icon: ['M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5', 'M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5'] },
+  obs: { label: 'WHIP', icon: ['M12 16V4', 'M7 9l5-5 5 5', 'M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4'] },
+  whep: { label: 'WHEP', icon: ['M12 4v12', 'M7 11l5 5 5-5', 'M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4'] },
+  srt: { label: 'SRT (via helper)', icon: ['M12 13v8', 'M9 21h6', 'M8.5 9.5a5 5 0 0 1 7 0', 'M5.5 6.5a9 9 0 0 1 13 0', 'M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'] },
+};
+
+function kindIcon(paths) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', width: 18, height: 18, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) svg.setAttribute(k, v);
+  for (const d of paths) { const p = document.createElementNS(ns, 'path'); p.setAttribute('d', d); svg.append(p); }
+  return svg;
+}
+
 function mountSourcesTab(app, root) {
   const { sources, switcher, store } = app;
   const drafts = new Map();
   const errors = new Map();
 
   const nameIn = el('input', { type: 'text', placeholder: 'Source name, e.g. Camera 1' });
-  const kindSel = select({ peer: 'Contributor (browser link)', obs: 'OBS / WHIP encoder', srt: 'SRT (via helper)', whep: 'WHEP endpoint' }, 'peer', () => {});
+  // Source type picker: a row of icon buttons; the note under it explains the chosen type.
+  let kind = 'peer';
+  const kindBtns = Object.entries(SOURCE_KINDS).map(([k, t]) => {
+    const b = el('button', { type: 'button', class: 'kind-btn', role: 'radio', title: t.label, onclick: () => { kind = k; renderIntro(); } },
+      kindIcon(t.icon), el('span', {}, t.label));
+    b.dataset.kind = k;
+    return b;
+  });
+  const kindRow = el('div', { class: 'kind-row', role: 'radiogroup', 'aria-label': 'Source type' }, kindBtns);
   const add = () => {
-    const s = sources.add({ name: nameIn.value.trim(), kind: kindSel.value });
+    const s = sources.add({ name: nameIn.value.trim(), kind });
     nameIn.value = '';
     if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') invite(s);
     if (s.cfg.kind === 'obs' && store.ws.settings.signalingUrl) sources.reconnect(s.id);
@@ -64,15 +89,27 @@ function mountSourcesTab(app, root) {
   const list = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
   root.append(
     el('div', { class: 'section-title' }, 'Add source'),
-    el('div', { class: 'card' }, el('div', { class: 'btn-row' }, nameIn, kindSel, el('button', { class: 'btn primary', onclick: add }, 'Add'))),
-    intro,
+    el('div', { class: 'card add-source' }, kindRow, intro,
+      el('div', { class: 'btn-row' }, nameIn, el('button', { class: 'btn primary', onclick: add }, 'Add'))),
     el('div', { class: 'section-title' }, 'Sources'),
     list);
 
   function renderIntro() {
-    intro.replaceChildren(relayWorksRemotely(store.ws.settings.signalingUrl)
-      ? 'Contributor sources use the optional signaling relay: send the contributor their link once; it reconnects automatically.'
-      : 'No server needed: each contributor gets an invite link, and sends back a reply code you paste here. Media flows directly between browsers. (Optional: configure a signaling relay in Settings for automatic reconnection.)');
+    for (const b of kindBtns) {
+      b.classList.toggle('on', b.dataset.kind === kind);
+      b.setAttribute('aria-checked', String(b.dataset.kind === kind));
+    }
+    const relay = relayWorksRemotely(store.ws.settings.signalingUrl);
+    const helper = app.helperInfo ? '' : ' The helper is not running on this computer yet: the new source shows how to install it.';
+    const text = {
+      peer: relay
+        ? 'Send someone a link: they open it in a phone or computer browser and allow camera and microphone. The link is reusable and reconnects by itself through the signaling relay set in Settings. Video goes directly from their browser to this one.'
+        : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
+      obs: `For encoders that publish with WHIP: OBS, Larix, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
+      whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
+      srt: `For SRT senders: Larix, OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
+    }[kind];
+    intro.replaceChildren(text);
   }
 
   async function invite(s) {
@@ -93,7 +130,7 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn sm', onclick: () => switcher.setPreview({ kind: 'source', id: s.id }) }, 'Preview'));
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
-      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · OBS / WHIP encoder' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · relay signaling' : ' · copy-paste signaling',
+      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · WHIP' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · invite link, relay' : ' · invite link, copy-paste',
       s.info?.device ? ` · ${s.info.device}` : '');
     const detail = el('div', { class: `card-detail ${s.state === 'failed' ? 'bad' : ''}` }, s.detail || '');
     const err = errors.get(s.id) ? el('div', { class: 'card-detail bad' }, errors.get(s.id)) : null;
