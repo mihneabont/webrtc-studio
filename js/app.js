@@ -169,27 +169,33 @@ function renderStatus() {
   }
   top.replaceChildren(...pills);
 
+  // [key, kind, text, button label, button action]. Closing one (×) hides it until
+  // its condition clears; if it comes back later, it shows again.
   const alerts = [];
-  if (!window.isSecureContext) alerts.push(['bad', 'This page is not served over HTTPS (or localhost). Browsers disable WebRTC media features on insecure origins.']);
-  if (audio.ctx.state !== 'running') alerts.push(['warn', 'Audio engine is paused by the browser until you interact with the page. Programme audio is silent until then.', 'Start audio', () => audio.ctx.resume()]);
-  if (m.warn) alerts.push(['warn', m.warn]);
+  if (!window.isSecureContext) alerts.push(['insecure', 'bad', 'This page is not served over HTTPS (or localhost). Browsers disable WebRTC media features on insecure origins.']);
+  if (audio.ctx.state !== 'running') alerts.push(['audio', 'warn', 'Audio engine is paused by the browser until you interact with the page. Programme audio is silent until then.', 'Start audio', () => audio.ctx.resume()]);
+  if (m.warn) alerts.push(['render', 'warn', m.warn]);
   const hw = hardwareWarning(srcs);
-  if (hw) alerts.push(['warn', hw]);
+  if (hw) alerts.push(['hardware', 'warn', hw]);
   for (const o of liveOuts) {
     const lim = o.stats?.out?.video?.limitation;
-    if (lim === 'cpu') alerts.push(['warn', `"${o.cfg.name}": the video encoder is limited by CPU, so quality is reduced. Lower the resolution or frame rate, or stop other outputs.`]);
+    if (lim === 'cpu') alerts.push([`cpu-${o.id}`, 'warn', `"${o.cfg.name}": the video encoder is limited by CPU, so quality is reduced. Lower the resolution or frame rate, or stop other outputs.`]);
   }
-  if (store.loadedFromDisk && (srcs.length || outs.length) && !dismissed.has('restored') &&
+  if (store.loadedFromDisk && (srcs.length || outs.length) &&
       srcs.every((s) => s.state === 'offline' || s.state === 'waiting') && outs.every((o) => o.state === 'idle')) {
-    alerts.push(['info', `Restored your saved workspace (${srcs.length} source${srcs.length === 1 ? '' : 's'}, ${store.ws.scenes.length} scene${store.ws.scenes.length === 1 ? '' : 's'}, ${outs.length} output${outs.length === 1 ? '' : 's'}). Saved settings are not live connections: reconnect sources and restart outputs.`, 'Dismiss', () => dismissed.add('restored')]);
+    alerts.push(['restored', 'info', `Restored your saved workspace (${srcs.length} source${srcs.length === 1 ? '' : 's'}, ${store.ws.scenes.length} scene${store.ws.scenes.length === 1 ? '' : 's'}, ${outs.length} output${outs.length === 1 ? '' : 's'}). Saved settings are not live connections: reconnect sources and restart outputs.`]);
   }
+  const keys = new Set(alerts.map(([key]) => key));
+  for (const k of dismissed) if (!keys.has(k) && k !== 'restored') dismissed.delete(k); // the restored note is once per load
+  const shown = alerts.filter(([key]) => !dismissed.has(key));
   const box = $('#alerts');
-  const sig = JSON.stringify(alerts.map(([k, t]) => [k, t]));
+  const sig = JSON.stringify(shown.map(([k, kind, t]) => [k, kind, t]));
   if (sig === box.dataset.sig) return;
   box.dataset.sig = sig;
-  box.replaceChildren(...alerts.map(([kind, text, btn, fn]) => el('div', { class: `alert ${kind}` }, el('span', {}, text),
-    btn ? el('button', { class: 'btn sm', onclick: () => { fn(); box.dataset.sig = ''; renderStatus(); } }, btn) : null)));
-  document.documentElement.style.setProperty('--alerts-h', `${box.offsetHeight}px`);
+  const redraw = () => { box.dataset.sig = ''; renderStatus(); };
+  box.replaceChildren(...shown.map(([key, kind, text, btn, fn]) => el('div', { class: `alert ${kind}`, role: 'status' }, el('span', {}, text),
+    btn ? el('button', { class: 'btn sm', onclick: () => { fn(); redraw(); } }, btn) : null,
+    el('button', { class: 'alert-close', title: 'Hide', 'aria-label': 'Hide this message', onclick: () => { dismissed.add(key); redraw(); } }, '×'))));
 }
 
 function hardwareWarning(srcs) {
