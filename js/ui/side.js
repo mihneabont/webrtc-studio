@@ -2,7 +2,7 @@
 import { el, fmtKbps, fmtRes, fmtMs, uid, relayWorksRemotely } from '../util.js';
 import { SOURCE_STATES, stateLabel } from '../sources.js';
 import { codecSupported } from '../rtc.js';
-import { field, text, num, select, check, linkBox, statLine, CardList } from './forms.js';
+import { field, text, num, select, check, linkBox, statLine, CardList, SECRET } from './forms.js';
 import { parseYouTube, fmtClock, youTubeSupported } from '../youtube.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
@@ -186,7 +186,7 @@ function mountSourcesTab(app, root) {
           live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
     } else {
       const url = text(s.cfg.whepUrl, (v) => sources.update(s.id, { whepUrl: v.trim() }), { type: 'url', placeholder: 'https://…/whep/…' });
-      const tok = el('input', { type: 'password', placeholder: 'Bearer token (optional, not saved)', value: s.token || '' });
+      const tok = el('input', { ...SECRET, placeholder: 'Bearer token (optional, not saved)', value: s.token || '' });
       tok.addEventListener('change', () => { s.token = tok.value; });
       actions.push(field('WHEP URL', url), field('Token', tok), el('div', { class: 'btn-row' },
         el('button', { class: 'btn primary', onclick: () => sources.connectWhep(s.id, tok.value) }, live ? 'Reconnect' : 'Connect'),
@@ -448,7 +448,7 @@ function mountSettingsTab(app, root) {
       field('TURN server URL', text(ice.turnUrl, (v) => { ice.turnUrl = v.trim(); save(); }, { placeholder: 'turn:turn.example.com:3478?transport=udp' })),
       el('div', { class: 'grid2' },
         field('TURN username', text(ice.turnUser, (v) => { ice.turnUser = v; save(); })),
-        field('TURN password', (() => { const i = el('input', { type: 'password', value: ice.turnPass }); i.addEventListener('change', () => { ice.turnPass = i.value; save(); }); return i; })())),
+        field('TURN password', (() => { const i = el('input', { ...SECRET, value: ice.turnPass }); i.addEventListener('change', () => { ice.turnPass = i.value; save(); }); return i; })())),
       check('Force relay (send everything through TURN)', ice.forceRelay, (v) => { ice.forceRelay = v; save(); }),
       el('div', { class: 'small muted' }, 'ICE settings apply to new connections. TURN credentials are stored in this browser.')),
     el('div', { class: 'card' },

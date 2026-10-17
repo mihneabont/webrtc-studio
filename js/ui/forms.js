@@ -102,3 +102,12 @@ export function editingIn(node) {
   const a = document.activeElement;
   return !!a && a !== document.body && node.contains(a) && a.matches('input:not([type=checkbox]):not([type=range]):not([type=color]), textarea, select');
 }
+
+// Stream keys, tokens and passphrases: masked like a password, but not a
+// password field. Chrome's password manager treats any password field next to
+// a text field as a login form and offers to save "username and password" (the
+// YouTube link and a stream key, for example); these are not logins.
+export const SECRET = {
+  type: 'text', class: 'secret', autocomplete: 'off', spellcheck: 'false', autocapitalize: 'off',
+  'data-lpignore': 'true', 'data-1p-ignore': 'true', 'data-bwignore': 'true', 'data-form-type': 'other',
+};

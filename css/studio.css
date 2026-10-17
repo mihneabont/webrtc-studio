@@ -288,3 +288,5 @@ details[open] summary { margin-bottom: 6px; }
 .yt-howto-title svg { flex: none; }
 .yt-howto ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
 .yt-howto b { color: #fff; }
+/* Masked like a password, without being a password field (see SECRET in forms.js). */
+input.secret { -webkit-text-security: disc; text-security: disc; }

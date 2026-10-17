@@ -3,7 +3,7 @@ import { el, fmtKbps, fmtRes, fmtMs, relayWorksRemotely } from '../util.js';
 import { OUTPUT_STATES, TWITCH, defaultKbps, rtmpFormat } from '../outputs.js';
 import { downloadHelperInstaller } from './helper-install.js';
 import { sealSecret, openSecret } from '../store.js';
-import { field, text, num, select, check, linkBox, statLine, CardList } from './forms.js';
+import { field, text, num, select, check, linkBox, statLine, CardList, SECRET } from './forms.js';
 
 const RESOLUTIONS = { '1920x1080': '1920×1080 (1080p)', '1280x720': '1280×720 (720p)', '960x540': '960×540', '854x480': '854×480 (480p)', '640x360': '640×360' };
 const FPS = { 24: '24', 25: '25', 30: '30', 50: '50', 60: '60' };
@@ -99,7 +99,7 @@ export function mountOutputsTab(app, root, setBadge) {
     if (o.cfg.kind === 'rtmp') {
       parts.push(...rtmpHelperNotes());
       const url = text(o.cfg.url, (v) => outputs.update(o.id, { url: v.trim() }, { silent: true }), { placeholder: 'rtmp://live.twitch.tv/app' });
-      const keyIn = el('input', { type: 'password', value: o.token || '', placeholder: 'Stream key', autocomplete: 'off' });
+      const keyIn = el('input', { ...SECRET, value: o.token || '', placeholder: 'Stream key', autocomplete: 'off' });
       keyIn.addEventListener('change', () => { o.token = keyIn.value.trim(); });
       parts.push(field('Server URL', url, 'From the platform\'s stream settings, e.g. rtmp://a.rtmp.youtube.com/live2 or rtmp://live.twitch.tv/app. rtmps:// works too.'),
         field('Stream key', keyIn), secretControls(o, keyIn));
@@ -125,7 +125,7 @@ export function mountOutputsTab(app, root, setBadge) {
       if (probs.length) parts.push(el('div', { class: 'note warn' }, probs.join(' ')));
     }
     const url = text(o.cfg.url, (v) => outputs.update(o.id, { url: v.trim() }, { silent: true }), { type: 'url', placeholder: 'https://ingest.example.com/whip/…' });
-    const keyIn = el('input', { type: 'password', value: o.token || '', placeholder: twitch ? 'Twitch stream key (live_…)' : 'Bearer token (optional)', autocomplete: 'off' });
+    const keyIn = el('input', { ...SECRET, value: o.token || '', placeholder: twitch ? 'Twitch stream key (live_…)' : 'Bearer token (optional)', autocomplete: 'off' });
     keyIn.addEventListener('change', () => { o.token = keyIn.value.trim(); });
     parts.push(field(twitch ? 'Ingest URL' : 'WHIP URL', url), field(twitch ? 'Stream key' : 'Bearer token', keyIn));
     parts.push(secretControls(o, keyIn));
@@ -169,7 +169,7 @@ export function mountOutputsTab(app, root, setBadge) {
   function secretControls(o, keyIn) {
     const box = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
     if (o.cfg.secret?.mode === 'enc' && !unlocked.has(o.id)) {
-      const pass = el('input', { type: 'password', placeholder: 'Passphrase' });
+      const pass = el('input', { ...SECRET, placeholder: 'Passphrase' });
       const msg = el('span', { class: 'small muted' });
       box.append(el('div', { class: 'small muted' }, 'A saved, encrypted key exists for this output.'),
         el('div', { class: 'linkbox' }, pass, el('button', { class: 'btn sm', onclick: async () => {
@@ -178,7 +178,7 @@ export function mountOutputsTab(app, root, setBadge) {
       return box;
     }
     const mode = o.cfg.remember || 'none';
-    const pass = el('input', { type: 'password', placeholder: 'Passphrase (not stored)' });
+    const pass = el('input', { ...SECRET, placeholder: 'Passphrase (not stored)' });
     const status = el('span', { class: 'small muted' }, o.cfg.secret ? (o.cfg.secret.mode === 'enc' ? 'Key saved, encrypted.' : 'Key saved in plain text in this browser.') : 'Key is kept for this session only.');
     const sel = select({ none: 'Don\'t save the key', enc: 'Save encrypted with a passphrase', plain: 'Save unencrypted on this device' }, mode, (v) => {
       outputs.update(o.id, { remember: v });
