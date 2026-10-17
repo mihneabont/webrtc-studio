@@ -21,6 +21,31 @@ const ui = {
   replyCard: $('#replyCard'), reply: $('#reply'), copy: $('#copy'), copied: $('#copied'), stats: $('#stats'), who: $('#who'), help: $('#help'),
 };
 
+// --- invites already answered in this browser --------------------------------
+// A copy-paste invite works once, and this page can't ask the studio whether it
+// is still open. What it can know is whether this browser already answered it:
+// then say so, instead of letting the contributor try a link that is used up.
+const USED_KEY = 'webrtc-studio.used-invites';
+async function inviteId(code) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code)));
+  return [...h.slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function usedInvites() {
+  try { return JSON.parse(localStorage.getItem(USED_KEY) || '{}') || {}; } catch { return {}; }
+}
+async function markInviteUsed(code) {
+  try {
+    const used = usedInvites();
+    used[await inviteId(code)] = Date.now();
+    // Keep the 50 most recent.
+    const keep = Object.entries(used).sort((a, b) => b[1] - a[1]).slice(0, 50);
+    localStorage.setItem(USED_KEY, JSON.stringify(Object.fromEntries(keep)));
+  } catch { /* storage blocked: nothing remembered */ }
+}
+async function inviteUsedAt(code) {
+  try { return usedInvites()[await inviteId(code)] || null; } catch { return null; }
+}
+
 function setState(kind, title, detail = '') {
   ui.dot.className = `dot ${kind}`;
   ui.state.textContent = title;
@@ -175,6 +200,7 @@ async function join() {
       const sdp = await answerOffer(msg);
       const code = await encodeSignal({ t: 'answer', slot: msg.slot, sdp });
       ui.reply.value = code;
+      markInviteUsed(offerCode);
       ui.replyCard.classList.remove('hidden');
       setState('invited', 'Send the reply code to the studio', 'Copy the code below and send it to the operator. You are connected as soon as they paste it.');
     } else if (relay) {
@@ -348,8 +374,15 @@ window.addEventListener('pagehide', () => { if (joined) sendBye(); });
     try {
       offerMsg = await decodeSignal(offerCode);
       ui.who.textContent = offerMsg.name ? `as “${offerMsg.name}”` : '';
-      setState('idle', 'Ready', 'Choose your camera and microphone, then press Join studio.');
       ui.help.textContent = 'This link works once. Media goes directly from your browser to the studio; nothing is uploaded to a server.';
+      const usedAt = await inviteUsedAt(offerCode);
+      if (usedAt) {
+        const when = new Date(usedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+        setState('warn', 'This invite was already used', `You already joined with this link on this device (${when}). Each invite works once: if you were disconnected, ask the studio operator for a new link.`);
+        ui.go.textContent = 'Use it anyway';
+      } else {
+        setState('idle', 'Ready', 'Choose your camera and microphone, then press Join studio.');
+      }
     } catch (e) {
       setState('failed', 'Invalid invite link', e.message);
       ui.go.disabled = true;
