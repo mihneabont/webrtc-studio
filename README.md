@@ -61,10 +61,12 @@ browser.
    an invite link. Send it to the contributor; they press *Join studio* and send
    back a reply code; paste it into the source card. Media then flows directly
    between the two browsers. WHEP sources take a URL instead.
-   **YouTube** sources take a YouTube link: Connect opens a small window with
-   YouTube's own player, you click Start and allow sharing that window, and the
-   studio captures it as a live source (nothing is downloaded). Play, pause,
-   restart and loop from the source card. Sound needs Chrome or Edge.
+   **YouTube** sources take a YouTube link: Connect loads YouTube's own player
+   hidden inside the studio, and the studio captures just that player (Element
+   Capture), so nothing is downloaded and no browser bar is in the picture. The
+   browser asks once per source to share this tab. Play, pause, seek on the
+   progress bar, restart, mute and loop from the source card. Needs Chrome or
+   Edge 132 or later.
    **OBS or another WHIP encoder** can be a source too: choose *OBS / WHIP
    encoder*, and the card shows a Server URL and Bearer Token to paste into OBS
    (Settings → Stream → Service: WHIP). This needs the optional helper running

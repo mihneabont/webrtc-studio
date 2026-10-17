@@ -119,7 +119,7 @@ function mountSourcesTab(app, root) {
         : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
       obs: `For encoders that publish with WHIP: OBS, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
       whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
-      youtube: 'Play a YouTube video as a source. Paste its link and click Connect: a small window opens with YouTube\'s own player, and the studio captures that window, so nothing is downloaded. Play, pause and loop it from here. Only use videos you have the rights to broadcast.',
+      youtube: 'Play a YouTube video as a source. Paste its link and click Connect: YouTube\'s own player loads inside the studio and is captured on its own, so nothing is downloaded. The browser asks once to share this tab; choose Allow. Then play, pause, seek and loop it from the source card. Only use videos you have the rights to broadcast.',
       srt: `For SRT senders: OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
     }[kind];
     intro.replaceChildren(text);
@@ -275,29 +275,30 @@ function mountSourcesTab(app, root) {
     return lan.find((a) => a.startsWith('192.168.')) || lan.find((a) => a.startsWith('10.')) || lan[0] || null;
   }
 
-  // YouTube: a link, Connect, then playback controls once the player window is shared.
+  // YouTube: a link and Connect, then the player's controls and a progress bar.
   function ytActions(s) {
     const url = text(s.cfg.ytUrl || '', (v) => sources.update(s.id, { ytUrl: v.trim() }), { type: 'url', placeholder: 'https://www.youtube.com/watch?v=…', autocomplete: 'off' });
     const connect = () => { errors.delete(s.id); sources.connectYouTube(s.id, url.value); };
     url.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
     const st = s.yt?.status;
-    const live = !!s.stream;
     const out = [field('YouTube link', el('div', { class: 'linkbox' }, url,
-      el('button', { class: 'btn primary sm', onclick: connect }, s.yt ? 'Reload' : 'Connect')))];
+      el('button', { class: 'btn primary sm', onclick: connect }, s.stream ? 'Load' : 'Connect')))];
     if (s.cfg.ytUrl && !parseYouTube(s.cfg.ytUrl)) out.push(el('div', { class: 'card-detail bad' }, 'That isn\'t a YouTube video link.'));
-    if (st?.title) out.push(el('div', { class: 'yt-title', title: st.title }, st.title));
-    if (st && !st.error) {
-      const playing = st.state === 'playing' || st.state === 'buffering';
-      out.push(el('div', { class: 'btn-row' },
-        el('button', { class: 'btn', onclick: () => sources.ytCommand(s.id, playing ? 'pause' : 'play') }, playing ? 'Pause' : 'Play'),
+    if (!s.stream || !st) return out;
+    if (st.title) out.push(el('div', { class: 'yt-title', title: st.title }, st.title));
+    // Progress bar: drag to seek; it follows playback while you are not dragging it.
+    const bar = el('input', { type: 'range', class: 'yt-bar', min: 0, max: Math.max(1, Math.floor(st.duration)), step: 1, value: Math.floor(st.time), dataset: { sid: s.id }, 'aria-label': 'Playback position' });
+    bar.addEventListener('input', () => { bar.dataset.dragging = '1'; time.textContent = `${fmtClock(Number(bar.value))} / ${fmtClock(st.duration)}`; });
+    bar.addEventListener('change', () => { sources.ytCommand(s.id, 'seek', Number(bar.value)); delete bar.dataset.dragging; });
+    const time = el('span', { class: 'yt-time mono small muted', dataset: { sid: s.id } }, `${fmtClock(st.time)} / ${fmtClock(st.duration)}`);
+    const playing = st.state === 'playing' || st.state === 'buffering';
+    out.push(el('div', { class: 'yt-progress' }, bar, time),
+      el('div', { class: 'btn-row' },
+        el('button', { class: `btn ${playing ? '' : 'primary'}`, onclick: () => sources.ytCommand(s.id, playing ? 'pause' : 'play') }, playing ? 'Pause' : 'Play'),
         el('button', { class: 'btn', title: 'Back to the start and play', onclick: () => sources.ytCommand(s.id, 'restart') }, 'Restart'),
-        check('Loop', !!s.cfg.ytLoop, (v) => sources.ytCommand(s.id, 'loop', v)),
-        el('span', { class: 'yt-time mono small muted', dataset: { sid: s.id } }, `${fmtClock(st.time)} / ${fmtClock(st.duration)}`)));
-    }
-    const btns = [];
-    if (s.yt && !live) btns.push(el('button', { class: 'btn', onclick: () => sources.ytShow(s.id) }, 'Show player window'));
-    if (s.yt) btns.push(el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, live ? 'Disconnect' : 'Close player'));
-    if (btns.length) out.push(el('div', { class: 'btn-row' }, btns));
+        el('button', { class: `btn ${st.muted ? 'on' : ''}`, title: 'Silence this video (in the programme too)', onclick: () => sources.ytCommand(s.id, 'mute', !st.muted) }, st.muted ? 'Unmute' : 'Mute'),
+        check('Loop', !!s.cfg.ytLoop, (v) => sources.ytCommand(s.id, 'loop', v))),
+      el('div', { class: 'btn-row' }, el('button', { class: 'btn sm', onclick: () => sources.disconnect(s.id) }, 'Disconnect')));
     return out;
   }
 
@@ -370,10 +371,14 @@ function mountSourcesTab(app, root) {
   sources.on('removed', renderAll);
   sources.on('reordered', renderAll);
   sources.on('change', (s) => cards.refresh(s));
-  sources.on('yt', (s) => { // playback time, without redrawing the card
-    const t = root.querySelector(`.yt-time[data-sid="${s.id}"]`);
+  sources.on('yt', (s) => { // playback time and progress bar, without redrawing the card
     const st = s.yt?.status;
-    if (t && st) t.textContent = `${fmtClock(st.time)} / ${fmtClock(st.duration)}`;
+    if (!st) return;
+    const bar = root.querySelector(`.yt-bar[data-sid="${s.id}"]`);
+    if (bar?.dataset.dragging) return;
+    if (bar) { bar.max = Math.max(1, Math.floor(st.duration)); bar.value = Math.floor(st.time); }
+    const t = root.querySelector(`.yt-time[data-sid="${s.id}"]`);
+    if (t) t.textContent = `${fmtClock(st.time)} / ${fmtClock(st.duration)}`;
   });
   sources.on('stats', (s) => {
     const slot = cards.cards.get(s.id)?.querySelector('.stats-slot');
