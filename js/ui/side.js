@@ -286,6 +286,16 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn primary sm', onclick: connect }, s.stream ? 'Load' : 'Connect')))];
     if (s.cfg.ytUrl && !parseYouTube(s.cfg.ytUrl)) out.push(el('div', { class: 'card-detail bad' }, 'That isn\'t a YouTube video link.'));
     if (!youTubeSupported()) out.push(el('div', { class: 'note warn' }, 'YouTube sources aren\'t available in this browser. Open the studio in Chrome or Edge (version 132 or later) to use them.'));
+    else if (!s.stream) {
+      // How it works, before connecting and while waiting for Start.
+      out.push(el('div', { class: 'yt-howto' },
+        el('div', { class: 'yt-howto-title' }, kindIcon(['M4 5h16v12H4z', 'M8 21h8', 'M12 17v4']), 'A YouTube window will open'),
+        el('ol', {},
+          el('li', {}, 'Click ', el('b', {}, 'Connect'), ': a small window opens with YouTube\'s player.'),
+          el('li', {}, 'In that window, click ', el('b', {}, 'Start'), ' and choose ', el('b', {}, 'Allow'), '.'),
+          el('li', {}, 'Keep the window open while you use this source. It can sit behind other windows; closing it stops the video here.')),
+        el('div', { class: 'small muted' }, 'Only the video is sent to the studio, with its sound going to the programme only. Allow pop-ups for this page if the browser blocks the window.')));
+    }
     if (s.yt && !s.stream) {
       out.push(el('div', { class: 'btn-row' },
         el('button', { class: 'btn', onclick: () => sources.ytShow(s.id) }, 'Show YouTube window'),

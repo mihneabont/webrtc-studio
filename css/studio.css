@@ -39,7 +39,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn:hover { background: #262c38; }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .45; cursor: default; transform: none; }
-.btn.primary { background: #1d4ed8; border-color: #2563eb; }
+.btn.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; }
 .btn.primary:hover { background: #2563eb; }
 .btn.danger { background: #5a1a1d; border-color: #7f2328; }
 .btn.danger:hover { background: #7f2328; }
@@ -283,3 +283,8 @@ details[open] summary { margin-bottom: 6px; }
 /* YouTube sources: the card's progress bar. */
 .yt-progress { display: flex; align-items: center; gap: 8px; }
 .yt-bar { flex: 1; min-width: 0; accent-color: var(--pgm); }
+.yt-howto { display: flex; flex-direction: column; gap: 6px; padding: 9px 11px; border: 1px solid #22406b; border-radius: var(--radius); background: #10233f; color: #b6d2ff; font-size: 12px; }
+.yt-howto-title { display: flex; align-items: center; gap: 7px; font-weight: 600; color: #dbe8ff; }
+.yt-howto-title svg { flex: none; }
+.yt-howto ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
+.yt-howto b { color: #fff; }
