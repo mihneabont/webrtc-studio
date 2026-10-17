@@ -81,7 +81,8 @@ class Mixer:
         self.ffmpeg = find_ffmpeg(settings.ffmpeg_bin)
         p = settings.ports
         self.rtsp = f"rtsp://engine:{self.secret}@127.0.0.1:{p.rtsp}"
-        self.outputs = Outputs(f"{self.rtsp}/program", self.ffmpeg, self._outputs_changed)
+        self.outputs = Outputs(f"{self.rtsp}/program", self.ffmpeg, self._outputs_changed,
+                               has_video=lambda: self.mtx.has_video("program"))
         self.gfx: OrderedDict[str, bytes] = OrderedDict()
         self.ws = dict(store.data.get("workspace") or {})
         self.clients: set[web.WebSocketResponse] = set()
@@ -94,7 +95,7 @@ class Mixer:
         self.started_at = time.time()
         self._last_status = 0.0
         self._status_pending = False
-        self.engine = Engine(self._make_program, settings.encoder)
+        self.engine = Engine(self._make_program, settings.encoder, on_rebuilt=self._apply_all)
         # Tell connected studios when the https address appears or changes.
         self.tunnel = Tunnel(settings.cloudflared_bin if settings.tunnel else None, settings.ports.http,
                              lambda: self._threadsafe(lambda: self._broadcast({"t": "info", **self.info()})))

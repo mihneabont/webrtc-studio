@@ -88,6 +88,9 @@ class Program:
         self.started_at = time.time()
         self.fps_count = 0
         self.fps = 0.0
+        # Encoded frames per encoder this second, and for how many seconds frames went in but none came out.
+        self.enc_count = {"pparse": 0, "mvparse": 0}
+        self.enc_stalled = 0
 
     # =============================================================== build
 
@@ -135,6 +138,8 @@ class Program:
         base.set_property("height", MV_BIG[1])
         self.mv.get_static_pad("sink_0").set_property("xpos", MV_BIG[0])
         self.pipeline.get_by_name("pgmrate").get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._count_frame)
+        for name in ("pparse", "mvparse"):
+            self.pipeline.get_by_name(name).get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._count_encoded, name)
 
         for sink_name, path, parse in (("pgm_out", "program", "pparse"), ("mv_out", "multiview", "mvparse")):
             pub = SrtPublisher(path, self.srt_uri, self.streamid(path))
@@ -731,8 +736,15 @@ class Program:
         self.fps_count += 1
         return Gst.PadProbeReturn.OK
 
+    def _count_encoded(self, _pad, _info, name):
+        self.enc_count[name] += 1
+        return Gst.PadProbeReturn.OK
+
     def _fps_tick(self) -> bool:
         self.fps, self.fps_count = float(self.fps_count), 0
+        stalled = self.fps > 0 and min(self.enc_count.values()) == 0
+        self.enc_stalled = self.enc_stalled + 1 if stalled else 0
+        self.enc_count = dict.fromkeys(self.enc_count, 0)
         return True
 
     def _on_message(self, _bus, msg: Gst.Message) -> None:

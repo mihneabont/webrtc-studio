@@ -49,13 +49,15 @@ def mask(url: str) -> str:
 
 
 class Output:
-    def __init__(self, cfg: dict, source_url: str, ffmpeg: str | None, on_change) -> None:
+    def __init__(self, cfg: dict, source_url: str, ffmpeg: str | None, on_change, has_video=lambda: True) -> None:
+        self.has_video = has_video
         self.cfg = cfg
         self.source_url = source_url
         self.ffmpeg = ffmpeg
         self.on_change = on_change
         self.want = False
         self.proc: subprocess.Popen | None = None
+        self._waiting = False
         self.state = "idle"  # idle, connecting, live, retrying, error
         self.error: str | None = None
         self.kbps = 0.0
@@ -133,6 +135,17 @@ class Output:
             self.want = False
             self.on_change()
             return
+        if not self.has_video():
+            # The engine is (re)starting or not encoding yet: ffmpeg would fail with "map 0:v:0".
+            with self._lock:
+                self.proc = None  # an earlier ffmpeg has exited; nothing runs while waiting
+                if self._waiting:
+                    return
+                self._waiting = True
+            self.state, self.error = "connecting", "Waiting for the programme video from the mixing engine…"
+            self.on_change()
+            threading.Timer(1.0, self._wait_video).start()
+            return
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         with self._lock:
             self.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -185,6 +198,12 @@ class Output:
             self.state = "idle"
             self.on_change()
 
+    def _wait_video(self) -> None:
+        with self._lock:
+            self._waiting = False
+        if self.want and self.proc is None:
+            self._spawn()
+
     def _retry(self, old: subprocess.Popen) -> None:
         if self.want and self.proc is old:
             self._spawn()
@@ -199,8 +218,9 @@ class Output:
 
 
 class Outputs:
-    def __init__(self, source_url: str, ffmpeg: str | None, on_change) -> None:
+    def __init__(self, source_url: str, ffmpeg: str | None, on_change, has_video=lambda: True) -> None:
         self.source_url = source_url
+        self.has_video = has_video
         self.ffmpeg = ffmpeg
         self.on_change = on_change
         self.items: dict[str, Output] = {}
@@ -214,7 +234,7 @@ class Outputs:
             if oid in self.items:
                 self.items[oid].update(cfg)
             else:
-                self.items[oid] = Output(cfg, self.source_url, self.ffmpeg, self.on_change)
+                self.items[oid] = Output(cfg, self.source_url, self.ffmpeg, self.on_change, self.has_video)
 
     def start(self, oid: str) -> None:
         if oid in self.items:
