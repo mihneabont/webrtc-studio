@@ -45,6 +45,9 @@ const STATIC = arg('--static', null);
 const FORWARD_ALLOW = (process.env.FORWARD_ALLOW || 'g.webrtc.live-video.net').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_BODY = 256 * 1024;
 const MAX_CHUNK = 16 * 1024 * 1024;
+// Raise when the studio page needs something new from the helper; the page
+// (HELPER_VERSION in js/ui/helper-install.js) then offers an update.
+const VERSION = 2;
 
 const rooms = new Map(); // room -> Map(peer -> {res, queue})
 const pending = new Map(); // gen -> resolve(message): answers awaited by HTTP requests
@@ -469,7 +472,7 @@ async function handle(req, res) {
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   if (req.method === 'OPTIONS') { res.writeHead(204, parts[0] === 'whip-in' || parts[0] === 'whip-session' ? { 'Accept-Post': 'application/sdp', 'Accept-Patch': 'application/trickle-ice-sdpfrag' } : {}).end(); return; }
   if (parts[0] === 'helper' && parts.length === 1) {
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', features: ['relay', 'forward', 'whip-in', 'whip-test', ...(findFfmpeg() ? ['rtmp'] : []), ...(ffmpegCanSrt(findFfmpeg()) ? ['srt'] : [])], lan: lanIPv4(), port: PORT, ffmpeg: !!findFfmpeg() }));
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', version: VERSION, features: ['relay', 'forward', 'whip-in', 'whip-test', ...(findFfmpeg() ? ['rtmp'] : []), ...(ffmpegCanSrt(findFfmpeg()) ? ['srt'] : [])], lan: lanIPv4(), port: PORT, ffmpeg: !!findFfmpeg() }));
     return;
   }
 

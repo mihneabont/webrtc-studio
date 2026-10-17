@@ -235,3 +235,18 @@ details[open] summary { margin-bottom: 6px; }
 @media (max-width: 1500px) {
   .layout { grid-template-columns: minmax(0, 1fr) 360px; }
 }
+
+/* ---------- helper status (top bar) ---------- */
+.helper-status { position: relative; }
+.helper-pill { cursor: pointer; color: var(--text); font: inherit; font-size: 12px; }
+.helper-pill:hover { border-color: var(--border-strong); }
+.helper-pop {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; width: 340px; max-width: calc(100vw - 32px);
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 8px 24px #0008;
+}
+.helper-pop[hidden] { display: none; }
+.helper-title { font-weight: 600; }
+.helper-feats { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.helper-feat { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.helper-feat.ok { color: var(--text); }

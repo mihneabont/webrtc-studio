@@ -13,6 +13,7 @@ import { mountMonitors } from './ui/monitors.js';
 import { mountMultiview } from './ui/multiview.js';
 import { mountMixer } from './ui/mixer.js';
 import { mountSide } from './ui/side.js';
+import { mountHelperStatus } from './ui/helper-status.js';
 
 const store = new Store();
 const sources = new SourceManager(store);
@@ -73,17 +74,27 @@ app.detectHelper = async () => {
       const r = await fetch(`${base}/helper`, { cache: 'no-store' });
       const info = r.ok ? await r.json() : null;
       if (info?.app === 'webrtc-studio-helper') {
-        app.helperOrigin = base === bases[0] ? location.origin : base;
-        app.helperInfo = info;
-        app.ui.emit('settings');
+        setHelper(base === bases[0] ? location.origin : base, info);
         return app.helperOrigin;
       }
     } catch { /* not there */ }
   }
-  if (app.helperOrigin || app.helperInfo) { app.helperOrigin = null; app.helperInfo = null; app.ui.emit('settings'); }
+  setHelper(null, null);
   return null;
 };
+// Panels redraw only when the helper appears, goes away or changes.
+function setHelper(origin, info) {
+  const changed = origin !== app.helperOrigin || JSON.stringify(info) !== JSON.stringify(app.helperInfo);
+  app.helperOrigin = origin;
+  app.helperInfo = info;
+  const first = !app.helperChecked;
+  app.helperChecked = true;
+  if (changed) app.ui.emit('settings');
+  if (changed || first) app.ui.emit('helper');
+}
 app.detectHelper();
+// Keep the helper status current (it can be stopped, started or updated any time).
+setInterval(() => app.detectHelper(), 10000);
 // RTMP output and SRT input go through the helper: the one found above, or the
 // configured relay.
 outputs.helper = () => app.helperOrigin || store.ws.settings.signalingUrl || null;
@@ -94,6 +105,7 @@ mountMonitors(app, $('#monitors'));
 mountMultiview(app, $('#multiview'));
 mountMixer(app, $('#mixer'));
 mountSide(app, $('#side'));
+mountHelperStatus(app, $('#helperStatus'));
 
 const saveState = $('#saveState');
 store.onSaved = (err) => {

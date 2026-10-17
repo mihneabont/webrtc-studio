@@ -29,6 +29,12 @@ every sign-in), and adds local-network firewall rules after one admin prompt.
 Run it with `/uninstall` to remove the helper (ffmpeg stays installed). On
 macOS or Linux: `node signaling-server/server.mjs --port 8788`.
 
+The **Helper** pill in the top bar shows whether the helper is running (checked
+every 10 s), what it supports (OBS, SRT, RTMP) and whether it is out of date.
+Its panel has **Start helper** (through a `webrtc-studio-helper:` link the
+installer registers; the browser asks once before opening it), **Install /
+Update helper** and **Check again**.
+
 The same helper sends the programme to **RTMP** servers (YouTube, Twitch,
 Facebook…): add a **+ RTMP** output, paste the server URL and stream key, and
 start it. A browser can't send RTMP by itself, so this output records the

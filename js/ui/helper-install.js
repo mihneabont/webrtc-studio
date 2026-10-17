@@ -3,6 +3,10 @@ import { el } from '../util.js';
 
 // 8787 is often taken by a local web server, so the installed helper uses 8788.
 export const HELPER_PORT = 8788;
+// Must match VERSION in signaling-server/server.mjs; an older helper is offered an update.
+export const HELPER_VERSION = 2;
+// The installer registers this link type so the studio page can start the helper.
+export const HELPER_PROTOCOL = 'webrtc-studio-helper';
 
 // A web page can't install software, so this hands the user a setup file that
 // installs Node.js and ffmpeg (for RTMP output and SRT input) if needed, fetches the helper
@@ -20,6 +24,7 @@ export function downloadHelperInstaller() {
     'setlocal',
     'set "DIR=%LOCALAPPDATA%\\WebRTCStudioHelper"',
     'set "STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\WebRTC Studio helper.vbs"',
+    `set "PROTO=HKCU\\Software\\Classes\\${HELPER_PROTOCOL}"`,
     'if /i "%~1"=="/uninstall" goto uninstall',
     'echo == WebRTC Studio helper ==',
     'set "NODE="',
@@ -50,6 +55,10 @@ export function downloadHelperInstaller() {
     `> "%STARTUP%" echo CreateObject("WScript.Shell").Run """%NODE%"" ""%DIR%\\server.mjs"" --port ${HELPER_PORT}", 0, False`,
     stopOld,
     'wscript "%STARTUP%"',
+    'rem Lets the studio page start the helper again (its Start helper button).',
+    'reg add "%PROTO%" /ve /d "URL:WebRTC Studio helper" /f >nul',
+    'reg add "%PROTO%" /v "URL Protocol" /d "" /f >nul',
+    'reg add "%PROTO%\\shell\\open\\command" /ve /d "wscript.exe \\"%STARTUP%\\"" /f >nul',
     'echo Allowing your phone and OBS on this network to connect (Windows asks for admin once)...',
     ps(`Invoke-WebRequest -UseBasicParsing '${fwSrc}' -OutFile '%DIR%\\firewall.ps1'`),
     ps(`Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \\"%DIR%\\firewall.ps1\\" -Port ${HELPER_PORT}'`),
@@ -60,6 +69,7 @@ export function downloadHelperInstaller() {
     ':uninstall',
     stopOld,
     'del "%STARTUP%" 2>nul',
+    'reg delete "%PROTO%" /f >nul 2>nul',
     'if exist "%DIR%\\firewall.ps1" powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList \'-NoProfile -ExecutionPolicy Bypass -File \\\"%DIR%\\firewall.ps1\\\" -Remove\'"',
     'timeout /t 3 /nobreak >nul',
     'rmdir /s /q "%DIR%" 2>nul',
