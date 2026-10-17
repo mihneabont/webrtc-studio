@@ -119,7 +119,7 @@ function mountSourcesTab(app, root) {
         : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
       obs: `For encoders that publish with WHIP: OBS, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
       whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
-      youtube: 'Play a YouTube video as a source. Paste its link and click Connect: YouTube\'s own player loads inside the studio and is captured on its own, so nothing is downloaded. The browser asks once to share this tab; choose Allow. Its sound goes to the programme only. Then play, pause, seek and loop it from the source card. Only use videos you have the rights to broadcast.'
+      youtube: 'Play a YouTube video as a source. Paste its link and click Connect: a small window opens with YouTube\'s own player; click Start there and choose Allow. The studio receives just the video, with its own sound on its own fader (programme only, not your speakers), and nothing is downloaded. Keep the window open. Then play, pause, seek and loop it from the source card. Only use videos you have the rights to broadcast.'
         + (youTubeSupported() ? '' : ' Not available in this browser (Firefox): YouTube sources need Chrome or Edge.'),
       srt: `For SRT senders: OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
     }[kind];
@@ -286,9 +286,13 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn primary sm', onclick: connect }, s.stream ? 'Load' : 'Connect')))];
     if (s.cfg.ytUrl && !parseYouTube(s.cfg.ytUrl)) out.push(el('div', { class: 'card-detail bad' }, 'That isn\'t a YouTube video link.'));
     if (!youTubeSupported()) out.push(el('div', { class: 'note warn' }, 'YouTube sources aren\'t available in this browser. Open the studio in Chrome or Edge (version 132 or later) to use them.'));
+    if (s.yt && !s.stream) {
+      out.push(el('div', { class: 'btn-row' },
+        el('button', { class: 'btn', onclick: () => sources.ytShow(s.id) }, 'Show YouTube window'),
+        el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Close it')));
+    }
     if (!s.stream || !st) return out;
     if (st.title) out.push(el('div', { class: 'yt-title', title: st.title }, st.title));
-    out.push(el('div', { class: 'small muted' }, st.muted ? 'Sound: muted' : st.onAir ? 'Sound: on air' : 'Sound: silent until it is on Programme'));
     // Progress bar: drag to seek; it follows playback while you are not dragging it.
     const bar = el('input', { type: 'range', class: 'yt-bar', min: 0, max: Math.max(1, Math.floor(st.duration)), step: 1, value: Math.floor(st.time), dataset: { sid: s.id }, 'aria-label': 'Playback position' });
     bar.addEventListener('input', () => { bar.dataset.dragging = '1'; time.textContent = `${fmtClock(Number(bar.value))} / ${fmtClock(st.duration)}`; });
@@ -299,9 +303,11 @@ function mountSourcesTab(app, root) {
       el('div', { class: 'btn-row' },
         el('button', { class: `btn ${playing ? '' : 'primary'}`, onclick: () => sources.ytCommand(s.id, playing ? 'pause' : 'play') }, playing ? 'Pause' : 'Play'),
         el('button', { class: 'btn', title: 'Back to the start and play', onclick: () => sources.ytCommand(s.id, 'restart') }, 'Restart'),
-        el('button', { class: `btn ${st.muted ? 'on' : ''}`, title: 'Keep this video silent, even on air', onclick: () => sources.ytCommand(s.id, 'mute', !st.muted) }, st.muted ? 'Unmute' : 'Mute'),
+        el('button', { class: `btn ${st.muted ? 'on' : ''}`, title: 'Silence this video in the programme', onclick: () => sources.ytCommand(s.id, 'mute', !st.muted) }, st.muted ? 'Unmute' : 'Mute'),
         check('Loop', !!s.cfg.ytLoop, (v) => sources.ytCommand(s.id, 'loop', v))),
-      el('div', { class: 'btn-row' }, el('button', { class: 'btn sm', onclick: () => sources.disconnect(s.id) }, 'Disconnect')));
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn sm', onclick: () => sources.ytShow(s.id) }, 'Show YouTube window'),
+        el('button', { class: 'btn sm', onclick: () => sources.disconnect(s.id) }, 'Disconnect')));
     return out;
   }
 

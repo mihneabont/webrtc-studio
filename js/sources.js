@@ -9,7 +9,7 @@
 // the others.
 import { Emitter, uid, relayWorksRemotely } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
-import { parseYouTube, youTubeSupported, YouTubeStage } from './youtube.js';
+import { parseYouTube, youTubeSupported } from './youtube.js';
 import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whepSubscribe, httpTeardown, sdpCodecs } from './rtc.js';
 
 export const SOURCE_STATES = {
@@ -64,8 +64,12 @@ export class SourceManager extends Emitter {
     window.addEventListener('pagehide', () => {
       for (const s of this.list.values()) if (s.resourceUrl) httpTeardown(s.resourceUrl, s.token, { keepalive: true });
     });
-    this.ytStage = new YouTubeStage((id, st) => this._ytStatus(id, st), (id) => this._ytEnded(id));
-    this.ytOnAir = new Set(); // sources in Programme (or in a transition), set by the app
+    // YouTube sources: each player window (youtube.html) hands over its captured
+    // stream through this function, and reports playback with postMessage.
+    window.__studioYouTubeStream = (sid, stream) => this._ytStream(sid, stream);
+    window.addEventListener('message', (e) => {
+      if (e.origin === location.origin && e.data?.type === 'yt-status') this._ytStatus(e.data.sid, e.data);
+    });
   }
 
   get ws() { return this.store.ws; }
@@ -548,82 +552,76 @@ export class SourceManager extends Emitter {
   }
 
   // YouTube ------------------------------------------------------------------
-  // The video plays in YouTube's own player inside this page, hidden behind
-  // the studio, and the studio captures just that player (youtube.js).
-  // Nothing is downloaded.
+  // Each video plays in YouTube's own player in its own small window
+  // (youtube.html). After one click on Start there, that window captures only
+  // its player, with its own sound, and hands the stream over. Nothing is
+  // downloaded, and each YouTube source has its own fader like any other.
 
-  /** Load the link and capture its player. Call from a click (the share prompt needs one). */
-  async connectYouTube(id, url) {
+  /** Open (or reopen) the source's player window. Call from a click: browsers block pop-ups otherwise. */
+  connectYouTube(id, url) {
     const s = this.list.get(id);
     if (!s || s.cfg.kind !== 'youtube') return null;
     if (url !== undefined) this.update(id, { ytUrl: url.trim() });
     const v = parseYouTube(s.cfg.ytUrl);
     if (!v) { this._set(s, 'failed', 'That isn\'t a YouTube video link. Paste a link like https://www.youtube.com/watch?v=… or https://youtu.be/…'); return null; }
     if (!youTubeSupported()) { this._set(s, 'failed', 'YouTube sources aren\'t available in this browser. Use a current Chrome or Edge (version 132 or later).'); return null; }
+    const p = new URLSearchParams({ sid: s.id, v: v.id, t: String(v.start), name: s.cfg.name, loop: s.cfg.ytLoop ? '1' : '0' });
+    // Its size is the captured size: as close to the programme as the screen allows.
+    const f = this.ws.settings.format || { width: 1920, height: 1080 };
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(Math.min(f.width / dpr, screen.availWidth * 0.9)), h = Math.round(w * 9 / 16);
+    const win = window.open(new URL(`youtube.html#${p}`, location.href).toString(), `studio-yt-${s.id}`, `popup,width=${w},height=${h}`);
+    if (!win) { this._set(s, 'failed', 'The browser blocked the YouTube window. Allow pop-ups for this page, then click Connect again.'); return null; }
     this._teardown(s, 'reconnect');
-    this.ytStage.close(id);
-    s.yt = { status: null, videoId: v.id };
-    const gen = s.gen;
-    this._set(s, 'connecting', 'Loading the video. If the browser asks to share this tab, choose Allow: the studio captures only the YouTube videos.');
-    let stream;
-    try {
-      stream = await this.ytStage.open(id, { videoId: v.id, start: v.start, loop: !!s.cfg.ytLoop });
-    } catch (e) {
-      if (s.gen === gen) { s.yt = null; this._set(s, 'failed', e.message); }
-      return null;
-    }
-    if (s.gen !== gen) { stream.getTracks().forEach((t) => t.stop()); return null; }
-    this._ytStream(s, stream);
-    this.ytFollow(this.ytOnAir);
-    return stream;
-  }
-
-  /** The sources now on air: YouTube players follow (unmuted only while on air). */
-  ytFollow(ids) {
-    this.ytOnAir = new Set(ids);
-    this.ytStage.setOnAir(this.ytOnAir, this.ws.sources.map((c) => c.id));
+    s.yt = { win, status: null, videoId: v.id };
+    this._set(s, 'waiting', 'In the YouTube window that opened, click Start and choose Allow.');
+    return win;
   }
 
   ytCommand(id, cmd, arg) {
+    const s = this.list.get(id);
     if (cmd === 'loop') this.update(id, { ytLoop: !!arg });
-    this.ytStage.command(id, cmd, arg);
+    try { s?.yt?.win?.postMessage({ type: 'yt-cmd', sid: id, cmd, arg }, location.origin); } catch { /* window closed */ }
   }
 
-  _ytStream(s, stream) {
+  /** Bring the source's YouTube window to the front (to click Start, for example). */
+  ytShow(id) { try { this.list.get(id)?.yt?.win?.focus(); } catch { /* closed */ } }
+
+  _ytStream(sid, stream) {
+    const s = this.list.get(sid);
+    if (!s || s.cfg.kind !== 'youtube') { for (const t of stream.getTracks()) t.stop(); return; }
+    if (s.stream) for (const t of s.stream.getTracks()) t.stop();
     s.gen++;
     const gen = s.gen;
     s.stream = stream;
     s.hasVideo = stream.getVideoTracks().length > 0;
     s.hasAudio = stream.getAudioTracks().length > 0;
     s.videoFlowing = s.hasVideo; s.audioFlowing = s.hasAudio;
-    s.ytGen = gen;
+    for (const t of stream.getTracks()) {
+      t.addEventListener('ended', () => {
+        if (s.gen !== gen) return;
+        s.stream = null; s.hasVideo = s.hasAudio = s.videoFlowing = s.audioFlowing = false;
+        this.emit('media', s);
+        this._set(s, 'ended', 'The YouTube window stopped sharing. Click Start in it again, or Connect.');
+      });
+    }
     this.emit('media', s);
-    this._set(s, 'live', s.hasAudio ? 'YouTube video ready. Play it from here; its sound goes to the programme only, while it is on air.' : 'YouTube video ready, without sound (the browser didn\'t share the tab\'s audio).');
-  }
-
-  // "Stop sharing" in the browser's bar ends every YouTube source.
-  _ytEnded(id) {
-    const s = this.list.get(id);
-    if (!s || s.gen !== s.ytGen) return;
-    s.yt = null;
-    s.stream = null; s.hasVideo = s.hasAudio = s.videoFlowing = s.audioFlowing = false;
-    this.emit('media', s);
-    this._set(s, 'ended', 'Sharing stopped. Click Connect to load the video again.');
+    this._set(s, 'live', s.hasAudio ? 'YouTube video ready. Play it from here; its sound goes to the programme only.' : 'YouTube video ready, without sound (the window\'s audio wasn\'t shared).');
   }
 
   _ytStatus(id, st) {
     const s = this.list.get(id);
     if (!s || s.cfg.kind !== 'youtube') return;
     if (st.error) { this._set(s, 'failed', st.error); return; }
-    if (!s.yt) return;
+    if (!s.yt) s.yt = { win: null, status: null };
     const before = s.yt.status;
     s.yt.status = st;
-    if (!before || before.state !== st.state || before.title !== st.title || before.loop !== st.loop || before.muted !== st.muted || before.onAir !== st.onAir || !before.duration !== !st.duration) this.emit('change', s);
+    if (!before || before.state !== st.state || before.title !== st.title || before.loop !== st.loop || before.muted !== st.muted || before.captured !== st.captured || !before.duration !== !st.duration) this.emit('change', s);
     this.emit('yt', s);
   }
 
   _ytClose(s) {
-    this.ytStage.close(s.id);
+    try { s.yt?.win?.close(); } catch { /* already closed */ }
     s.yt = null;
   }
 

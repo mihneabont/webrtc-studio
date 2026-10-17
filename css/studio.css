@@ -280,10 +280,6 @@ details[open] summary { margin-bottom: 6px; }
 .paused-chip { margin-left: 6px; padding: 0 6px; border-radius: 99px; background: #3a2a0b; color: #ffd28a; font-size: 10px; }
 .kind-row .kind-btn:last-child:nth-child(odd) { grid-column: 1 / -1; justify-content: center; }
 .yt-title { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* YouTube sources: hidden players (captured, never seen) and the card's progress bar. */
-.yt-stage { position: fixed; left: 0; top: 0; z-index: -2; pointer-events: none; isolation: isolate; background: #000; }
-.yt-box { position: absolute; left: 0; top: 0; isolation: isolate; background: #000; overflow: hidden; }
-.yt-box iframe { display: block; border: 0; }
-.yt-cover { position: fixed; inset: 0; z-index: -1; background: var(--bg); pointer-events: none; }
+/* YouTube sources: the card's progress bar. */
 .yt-progress { display: flex; align-items: center; gap: 8px; }
 .yt-bar { flex: 1; min-width: 0; accent-color: var(--pgm); }

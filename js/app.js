@@ -33,12 +33,6 @@ sources.on('media', (s) => { compositor.bind(s.id, s.stream); audio.attach(s.id,
 sources.on('removed', (id) => { compositor.bind(id, null); audio.remove(id); updateTally(); });
 
 const updateTally = () => sources.setTally(switcher.pgmSources(), switcher.pvwSources());
-// YouTube players are unmuted only while on air: in Programme, or in a transition into or out of it.
-const updateYouTube = () => {
-  const t = switcher.trans;
-  sources.ytFollow([...switcher.pgmSources(), ...(t ? [...scenes.sourcesIn(t.from), ...scenes.sourcesIn(t.to)] : [])]);
-};
-switcher.on('change', updateYouTube);
 switcher.on('change', updateTally);
 updateTally();
 switcher._syncAudio(0);
@@ -183,10 +177,6 @@ function renderStatus() {
   if (m.warn) alerts.push(['render', 'warn', m.warn]);
   const hw = hardwareWarning(srcs);
   if (hw) alerts.push(['hardware', 'warn', hw]);
-  // A YouTube source captures this tab's sound, which includes what MON plays: an echo loop.
-  if (store.ws.audio.monitor === 'on' && srcs.some((s) => s.cfg.kind === 'youtube' && s.hasAudio)) {
-    alerts.push(['yt-monitor', 'warn', 'MON is on while a YouTube source captures this tab\'s sound, so the programme would hear itself (echo). Turn MON off while a YouTube source is connected.', 'Turn MON off', () => { store.ws.audio.monitor = 'off'; audio.applyMonitor(); store.save(); app.ui.emit('settings'); }]);
-  }
   for (const o of liveOuts) {
     const lim = o.stats?.out?.video?.limitation;
     if (lim === 'cpu') alerts.push([`cpu-${o.id}`, 'warn', `"${o.cfg.name}": the video encoder is limited by CPU, so quality is reduced. Lower the resolution or frame rate, or stop other outputs.`]);
