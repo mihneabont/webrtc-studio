@@ -56,6 +56,8 @@ export class SourceManager extends Emitter {
     super();
     this.store = store;
     this.relay = null;
+    this.meet = null; // public meeting points (meet.js): reconnecting invite links without a server
+    this.boot = uid(6); // this page load; contributors redo the handshake when it changes
     this.list = new Map(); // id -> runtime
     for (const cfg of store.ws.sources) this._makeRuntime(cfg);
     this._statsTimer = setInterval(() => this._sampleAll(), 1000);
@@ -82,7 +84,7 @@ export class SourceManager extends Emitter {
   add({ name, kind = 'peer', mode, whepUrl = '' }) {
     const cfg = {
       id: uid(4), name: name || `Source ${this.ws.sources.length + 1}`, kind,
-      mode: mode || (relayWorksRemotely(this.ws.settings.signalingUrl) ? 'relay' : 'manual'), whepUrl,
+      mode: mode || (this.meet || relayWorksRemotely(this.ws.settings.signalingUrl) ? 'relay' : 'manual'), whepUrl,
     };
     if (kind === 'obs' || kind === 'srt') { cfg.mode = 'relay'; cfg.token = uid(12); }
     if (kind === 'srt') {
@@ -281,25 +283,50 @@ export class SourceManager extends Emitter {
         for (const s of this.list.values()) {
           if (s.cfg.kind === 'obs' && s.state === 'offline') this._set(s, 'waiting', 'Waiting for the encoder. Start streaming in OBS.');
           if (s.cfg.kind === 'srt' && s.cfg.srtOn && !s.srt) this.startSrt(s.id);
-          if (s.cfg.kind === 'peer' && s.cfg.mode === 'relay' && s.state !== 'live') {
-            this._relaySend(`src-${s.id}`, { type: 'rehello' });
-            if (s.state === 'offline') this._set(s, 'waiting', 'Waiting for the contributor to open their link.');
-          }
+          if (s.cfg.kind === 'peer' && s.cfg.mode === 'relay' && s.state !== 'live' && !this.meet) this._rehello(s);
         }
       }
     });
   }
 
+  // Contributor links go through the public meeting points when they are on.
+  attachMeet(meet) {
+    this.meet = meet;
+    if (!meet) return;
+    meet.on('message', (m) => { if (/^src-/.test(m.from)) this._onRelay(m); });
+    meet.on('state', (st) => {
+      if (st !== 'open') return;
+      // After a studio reload: ask every contributor whose page is still open to reconnect.
+      for (const s of this.list.values()) {
+        if (s.cfg.kind === 'peer' && s.cfg.mode === 'relay' && s.state !== 'live') this._rehello(s);
+      }
+    });
+  }
+
+  /** A new reconnecting-link source: nothing to do until the contributor opens the link. */
+  awaitContributor(id) {
+    const s = this.list.get(id);
+    if (s) this._set(s, 'waiting', 'Waiting for the contributor to open their link.');
+  }
+
+  _rehello(s) {
+    this._relaySend(`src-${s.id}`, { type: 'rehello', boot: this.boot });
+    if (s.state === 'offline') this._set(s, 'waiting', 'Waiting for the contributor to open their link.');
+  }
+
   relayLink(id) {
     const s = this.list.get(id);
     const st = this.ws.settings;
-    const p = new URLSearchParams({ sig: st.signalingUrl, room: st.room, slot: s.id, name: s.cfg.name });
+    const p = this.meet
+      ? new URLSearchParams({ m: '1', room: st.room, key: st.meetKey, slot: s.id, name: s.cfg.name })
+      : new URLSearchParams({ sig: st.signalingUrl, room: st.room, slot: s.id, name: s.cfg.name });
     return new URL(`contribute.html#${p}`, location.href).toString();
   }
 
   _relaySend(to, msg) {
-    if (!this.relay) return;
-    this.relay.send(to, msg).catch((e) => console.warn('relay send failed', e));
+    const via = this.meet && /^src-/.test(to) ? this.meet : this.relay;
+    if (!via) return;
+    via.send(to, msg).catch((e) => console.warn('relay send failed', e));
   }
 
   obsUrl(id) {
@@ -388,7 +415,7 @@ export class SourceManager extends Emitter {
       await pc.setLocalDescription(offer);
       await waitForIceGathering(pc);
       if (s.gen !== gen) return;
-      this._relaySend(m.from, { type: 'offer', sdp: pc.localDescription.sdp, gen, name: s.cfg.name, ice: this.ws.settings.ice });
+      this._relaySend(m.from, { type: 'offer', sdp: pc.localDescription.sdp, gen, boot: this.boot, name: s.cfg.name, ice: this.ws.settings.ice });
     } else if (m.type === 'answer') {
       if (!s.pc || s.gen !== m.gen || s.pc.signalingState !== 'have-local-offer') return;
       try { await s.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }); } catch (e) {
@@ -440,9 +467,9 @@ export class SourceManager extends Emitter {
       return null;
     }
     if (s.cfg.mode === 'relay') {
-      if (!this.relay) { this._set(s, 'failed', 'Relay signaling is selected for this source but no signaling server is configured.'); return null; }
+      if (!this.relay && !this.meet) { this._set(s, 'failed', 'Relay signaling is selected for this source but no signaling server is configured.'); return null; }
       this._teardown(s, 'reconnect');
-      this._relaySend(`src-${s.id}`, { type: 'rehello' });
+      this._relaySend(`src-${s.id}`, { type: 'rehello', boot: this.boot, force: true });
       this._set(s, 'waiting', 'Asked the contributor page to reconnect. Waiting…');
       return null;
     }
@@ -460,8 +487,8 @@ export class SourceManager extends Emitter {
       s.retries++;
       this._set(s, 'failed', `${why} Retrying in ${delay / 1000}s (attempt ${s.retries}).`);
       s.retryTimer = setTimeout(() => this.connectWhep(s.id), delay);
-    } else if (s.cfg.mode === 'relay' && this.relay) {
-      this._relaySend(`src-${s.id}`, { type: 'rehello' });
+    } else if (s.cfg.mode === 'relay' && (this.relay || this.meet)) {
+      this._relaySend(`src-${s.id}`, { type: 'rehello', boot: this.boot });
       this._set(s, s.state, `${why} Asked the contributor to reconnect automatically.`);
     } else {
       this._set(s, s.state, `${why} With copy-paste signaling, reconnecting needs a new invite (click Reconnect).`);

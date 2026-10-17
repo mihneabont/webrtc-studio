@@ -19,6 +19,7 @@ export function defaultWorkspace() {
       defaultFit: 'cover',
       swapOnTake: true,
       sendTally: true,
+      publicMeet: true, // reconnecting invite links through public meeting points (meet.js)
     },
     multiview: { layout: 4, page: 0 },
     sources: [],
