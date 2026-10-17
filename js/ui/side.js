@@ -94,7 +94,7 @@ function mountSourcesTab(app, root) {
   const empty = el('div', { class: 'empty-state' },
     kindIcon(['M3 8a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M16 10l5-3v10l-5-3']),
     el('div', { class: 'empty-title' }, 'Add a source to start'),
-    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, or connect an encoder such as OBS or Larix. '
+    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, or connect an encoder such as OBS. '
       + 'Each source then appears here and in the multiview, ready to put on Preview and Programme.'));
   root.append(
     el('div', { class: 'section-title' }, 'Add source'),
@@ -115,9 +115,9 @@ function mountSourcesTab(app, root) {
       peer: relay
         ? 'Send someone a link: they open it in a phone or computer browser and allow camera and microphone. The link is reusable and reconnects by itself through the signaling relay set in Settings. Video goes directly from their browser to this one.'
         : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
-      obs: `For encoders that publish with WHIP: OBS, Larix, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
+      obs: `For encoders that publish with WHIP: OBS, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
       whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
-      srt: `For SRT senders: Larix, OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
+      srt: `For SRT senders: OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
     }[kind];
     intro.replaceChildren(text);
   }
@@ -206,7 +206,7 @@ function mountSourcesTab(app, root) {
     const url = sources.obsUrl(s.id);
     const lan = app.helperInfo?.lan?.[0];
     if (!url || !lan || !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(url)) return [];
-    return [field('Server for a phone (Larix) or another computer', linkBox(url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, `$1${lan}`), 'Copy'))];
+    return [field('Server for a phone or another computer', linkBox(url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, `$1${lan}`), 'Copy'))];
   }
 
   // Without a reachable helper, returns what to show instead of the card's
@@ -294,14 +294,14 @@ function mountSourcesTab(app, root) {
         : st.state === 'error' ? 'The helper could not listen on this port.'
           : `${st.state === 'listening' ? `Listening on UDP port ${st.port}` : 'Receiving'}${st.input?.video ? ` · input ${st.input.video}${st.input.audio ? ` + ${st.input.audio.toUpperCase()}` : ''}` : ''}${!st.encoder ? '' : /^pass-through/.test(st.encoder) ? ' · video passed through unchanged' : ` · converted with ${st.encoder}, up to ${st.height}p`}`;
     return [
-      el('div', { class: 'small muted' }, 'In the SRT sender (Larix, vMix, OBS, a hardware encoder) choose mode Caller and enter:'),
+      el('div', { class: 'small muted' }, 'In the SRT sender (OBS, vMix, a hardware encoder) choose mode Caller and enter:'),
       lan ? field('Address from a phone or another computer', linkBox(`srt://${lan}:${s.cfg.srtPort}`, 'Copy')) : null,
       field('Address from this computer', linkBox(`srt://127.0.0.1:${s.cfg.srtPort}`, 'Copy')),
       el('div', { class: 'btn-row' }, field('Port (UDP)', port), field('Latency (ms)', latency)),
       field('Passphrase', pass, 'If you set one, enter the same passphrase in the sender.'),
       field('Video', select({ convert: 'Convert (any sender, scaled to the programme)', passthrough: 'Pass through (lowest CPU, H.264 senders)' }, s.cfg.srtVideo || 'convert', (v) => change({ srtVideo: v })),
         (s.cfg.srtVideo || 'convert') === 'passthrough'
-          ? 'The sender\'s video goes to the studio unchanged: almost no CPU. The sender must send H.264 without B-frames (Larix and OBS defaults are fine) at no more than the programme size. If the picture stutters or stays black, switch back to Convert.'
+          ? 'The sender\'s video goes to the studio unchanged: almost no CPU. The sender must send H.264 without B-frames (OBS defaults are fine) at no more than the programme size. If the picture stutters or stays black, switch back to Convert.'
           : 'Works with any codec (HEVC, H.264). Uses the graphics chip when it can.'),
       el('div', { class: 'small muted' },
         `Use the same latency in the sender (${s.cfg.srtLatency} ms). `,
