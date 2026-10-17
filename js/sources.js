@@ -473,6 +473,12 @@ export class SourceManager extends Emitter {
   // The helper's address, set by the app (the one found on this computer, or the relay).
   helper() { return null; }
 
+  // The helper scales SRT sources to the programme height it was given when it
+  // started listening, so restart listening ones after a format change.
+  restartSrtForFormat() {
+    for (const s of this.list.values()) if (s.cfg.kind === 'srt' && s.srt) this.startSrt(s.id);
+  }
+
   async startSrt(id) {
     const s = this.list.get(id);
     if (!s || s.cfg.kind !== 'srt') return null;

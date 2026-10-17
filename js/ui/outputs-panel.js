@@ -24,6 +24,7 @@ export function mountOutputsTab(app, root, setBadge) {
     store.save();
     compositor.applyFormat();
     outputs.applyEncodingAll();
+    if ('height' in patch) app.sources.restartSrtForFormat();
     renderFormat();
     cards.render(outputs.all());
   };
