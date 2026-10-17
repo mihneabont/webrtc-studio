@@ -3,6 +3,11 @@ import { el } from '../util.js';
 
 // 8787 is often taken by a local web server, so the installed helper uses 8788.
 export const HELPER_PORT = 8788;
+// The helper version this page expects (HELPER_VERSION in server.mjs). An older
+// helper still works for what it supports; the page offers an update.
+export const HELPER_VERSION = 4;
+// URL scheme the installer registers so the page can start the helper.
+export const HELPER_SCHEME = 'webrtc-studio-helper';
 
 // A web page can't install software, so this hands the user a setup file that
 // installs Node.js and ffmpeg (for RTMP output and SRT input) if needed, fetches the helper
@@ -50,6 +55,10 @@ export function downloadHelperInstaller() {
     `> "%STARTUP%" echo CreateObject("WScript.Shell").Run """%NODE%"" ""%DIR%\\server.mjs"" --port ${HELPER_PORT}", 0, False`,
     stopOld,
     'wscript "%STARTUP%"',
+    'rem Lets the studio page start the helper again (its Turn on button opens webrtc-studio-helper:).',
+    `reg add "HKCU\\Software\\Classes\\${HELPER_SCHEME}" /ve /d "URL:WebRTC Studio helper" /f >nul`,
+    `reg add "HKCU\\Software\\Classes\\${HELPER_SCHEME}" /v "URL Protocol" /d "" /f >nul`,
+    `reg add "HKCU\\Software\\Classes\\${HELPER_SCHEME}\\shell\\open\\command" /ve /d "wscript.exe \\"%STARTUP%\\"" /f >nul`,
     'echo Allowing your phone and OBS on this network to connect (Windows asks for admin once)...',
     ps(`Invoke-WebRequest -UseBasicParsing '${fwSrc}' -OutFile '%DIR%\\firewall.ps1'`),
     ps(`Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \\"%DIR%\\firewall.ps1\\" -Port ${HELPER_PORT}'`),
@@ -60,6 +69,7 @@ export function downloadHelperInstaller() {
     ':uninstall',
     stopOld,
     'del "%STARTUP%" 2>nul',
+    `reg delete "HKCU\\Software\\Classes\\${HELPER_SCHEME}" /f >nul 2>nul`,
     'if exist "%DIR%\\firewall.ps1" powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList \'-NoProfile -ExecutionPolicy Bypass -File \\\"%DIR%\\firewall.ps1\\\" -Remove\'"',
     'timeout /t 3 /nobreak >nul',
     'rmdir /s /q "%DIR%" 2>nul',

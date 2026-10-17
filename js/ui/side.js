@@ -6,6 +6,7 @@ import { field, text, num, select, check, linkBox, statLine, CardList } from './
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
 import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
+import { mountHelperPanel } from './helper-panel.js';
 
 
 const TABS = { sources: 'Sources', scenes: 'Scenes', graphics: 'Graphics', outputs: 'Outputs', settings: 'Settings' };
@@ -23,11 +24,12 @@ export function mountSide(app, root) {
     bodies[k] = el('div', { class: 'tab-body hidden' });
     root.append(bodies[k]);
   }
-  function show(k) {
+  function show(k, section) {
     store.ws.ui.tab = k; store.save();
     for (const [id, b] of Object.entries(bodies)) b.classList.toggle('hidden', id !== k);
     for (const [id, b] of Object.entries(tabBtns)) b.classList.toggle('on', id === k);
     app.ui.emit('tab', k);
+    if (section) bodies[k].querySelector(`[data-section="${section}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
   app.ui.showTab = show;
 
@@ -316,6 +318,7 @@ function mountSettingsTab(app, root) {
     ['Secure context', window.isSecureContext ? 'yes' : 'no'],
   ];
 
+  mountHelperPanel(app, root);
   root.append(
     el('div', { class: 'section-title' }, 'Connection infrastructure (all optional)'),
     el('div', { class: 'note' },

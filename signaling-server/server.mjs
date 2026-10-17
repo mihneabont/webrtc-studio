@@ -45,6 +45,10 @@ const STATIC = arg('--static', null);
 const FORWARD_ALLOW = (process.env.FORWARD_ALLOW || 'g.webrtc.live-video.net').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_BODY = 256 * 1024;
 const MAX_CHUNK = 16 * 1024 * 1024;
+// Bumped when the studio page needs something new from the helper, so the page
+// can offer an update to an older install.
+const HELPER_VERSION = 4;
+const STARTED_AT = new Date().toISOString();
 
 const rooms = new Map(); // room -> Map(peer -> {res, queue})
 const pending = new Map(); // gen -> resolve(message): answers awaited by HTTP requests
@@ -469,7 +473,18 @@ async function handle(req, res) {
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   if (req.method === 'OPTIONS') { res.writeHead(204, parts[0] === 'whip-in' || parts[0] === 'whip-session' ? { 'Accept-Post': 'application/sdp', 'Accept-Patch': 'application/trickle-ice-sdpfrag' } : {}).end(); return; }
   if (parts[0] === 'helper' && parts.length === 1) {
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', features: ['relay', 'forward', 'whip-in', 'whip-test', ...(findFfmpeg() ? ['rtmp'] : []), ...(ffmpegCanSrt(findFfmpeg()) ? ['srt'] : [])], lan: lanIPv4(), port: PORT, ffmpeg: !!findFfmpeg() }));
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ app: 'webrtc-studio-helper', version: HELPER_VERSION, startedAt: STARTED_AT, platform: process.platform, features: ['relay', 'forward', 'whip-in', 'whip-test', ...(findFfmpeg() ? ['rtmp'] : []), ...(ffmpegCanSrt(findFfmpeg()) ? ['srt'] : [])], lan: lanIPv4(), port: PORT, ffmpeg: !!findFfmpeg() }));
+    return;
+  }
+
+  // Turn off from the studio page. It starts again at the next sign-in, or from
+  // the page's Turn on button (which the Windows installer sets up).
+  if (parts[0] === 'helper' && parts[1] === 'stop' && parts.length === 2 && req.method === 'POST') {
+    log('Stop requested from the studio page');
+    for (const s of [...srt.values()]) stopSrt(s);
+    for (const s of [...rtmp.values()]) stopRtmp(s);
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}');
+    setTimeout(() => process.exit(0), 300);
     return;
   }
 

@@ -26,7 +26,8 @@ helper running on the studio computer. Add an "OBS / WHIP encoder" source and
 click **Install helper (Windows)**: the downloaded setup file installs Node.js
 and ffmpeg if needed, runs the helper in the background on port 8788 (and at
 every sign-in), and adds local-network firewall rules after one admin prompt.
-Run it with `/uninstall` to remove the helper (ffmpeg stays installed). On
+Run it with `/uninstall` to remove the helper (ffmpeg stays installed). The top bar shows whether the helper is running; click it (or open
+Settings → Helper) to turn it off or on, check again, or reinstall/update it. On
 macOS or Linux: `node signaling-server/server.mjs --port 8788`.
 
 The same helper sends the programme to **RTMP** servers (YouTube, Twitch,
@@ -148,6 +149,7 @@ node tests/relay.mjs        # optional relay: reusable links, automatic reconnec
 node tests/four-sources.mjs # load check with four 1080p contributors
 node tests/obs.mjs          # OBS/WHIP encoder ingest via the helper (8 checks)
 node tests/rtmp.mjs         # RTMP output via the helper's ffmpeg (needs ffmpeg; 9 checks)
+node tests/helper-panel.mjs # helper status, turn off/on, update notice (static server on :8080; 13 checks)
 ```
 
 Set `PLAYWRIGHT_DIR` to the folder containing the `playwright` package if it

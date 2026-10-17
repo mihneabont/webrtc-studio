@@ -77,6 +77,9 @@ label.check { display: flex; gap: 6px; align-items: center; cursor: pointer; }
 .pill.onair { background: var(--pgm); border-color: #ff7a7f; color: #fff; font-weight: 700; animation: pulse 2s infinite; }
 .pill.warn { border-color: #6b4a12; color: var(--amber); }
 .pill.bad { border-color: #7f2328; color: #ff8a8e; }
+.pill-btn { font: inherit; font-size: 12px; color: inherit; cursor: pointer; }
+.pill-btn.warn { color: var(--amber); }
+.pill-btn:hover { border-color: var(--border-strong); }
 @keyframes pulse { 50% { box-shadow: 0 0 0 4px #e5484d44; } }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
 .dot.live, .dot.good { background: var(--good); box-shadow: 0 0 6px #2fb36e88; }
