@@ -287,3 +287,8 @@ details[open] summary { margin-bottom: 6px; }
 .yt-cover { position: fixed; inset: 0; z-index: -1; background: var(--bg); pointer-events: none; }
 .yt-progress { display: flex; align-items: center; gap: 8px; }
 .yt-bar { flex: 1; min-width: 0; accent-color: var(--pgm); }
+/* Firefox: the YouTube player must stay on screen to be shared. */
+.yt-visible { position: fixed; right: 12px; bottom: 12px; z-index: 30; display: flex; flex-direction: column; gap: 4px;
+  padding: 6px; background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 6px 20px #000a; }
+.yt-visible-label { font-size: 11px; color: var(--muted); max-width: 480px; cursor: move; user-select: none; touch-action: none; }
+.yt-visible .yt-box { position: relative; }

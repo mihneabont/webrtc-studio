@@ -9,7 +9,7 @@
 // the others.
 import { Emitter, uid, relayWorksRemotely } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
-import { parseYouTube, youTubeSupported, YouTubeStage } from './youtube.js';
+import { parseYouTube, youTubeSupported, elementCapture, YouTubeStage } from './youtube.js';
 import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whepSubscribe, httpTeardown, sdpCodecs } from './rtc.js';
 
 export const SOURCE_STATES = {
@@ -558,15 +558,17 @@ export class SourceManager extends Emitter {
     if (url !== undefined) this.update(id, { ytUrl: url.trim() });
     const v = parseYouTube(s.cfg.ytUrl);
     if (!v) { this._set(s, 'failed', 'That isn\'t a YouTube video link. Paste a link like https://www.youtube.com/watch?v=… or https://youtu.be/…'); return null; }
-    if (!youTubeSupported()) { this._set(s, 'failed', 'YouTube sources need a current Chrome or Edge (version 132 or later).'); return null; }
+    if (!youTubeSupported()) { this._set(s, 'failed', 'This browser can\'t share its window, so it can\'t use YouTube sources. Use a current Chrome, Edge or Firefox.'); return null; }
     this._teardown(s, 'reconnect');
     this.ytStage.close(id);
     s.yt = { status: null, videoId: v.id };
     const gen = s.gen;
-    this._set(s, 'connecting', 'Loading the video. If the browser asks to share this tab, choose Allow: the studio captures only the video.');
+    this._set(s, 'connecting', elementCapture()
+      ? 'Loading the video. When the browser asks to share this tab, choose Allow: the studio captures only the video.'
+      : 'Loading the video. When Firefox asks what to share, pick this Firefox window and Allow: the studio crops out the video.');
     let stream;
     try {
-      stream = await this.ytStage.open(id, { videoId: v.id, start: v.start, loop: !!s.cfg.ytLoop, ...this._ytSize() });
+      stream = await this.ytStage.open(id, { videoId: v.id, start: v.start, loop: !!s.cfg.ytLoop, label: s.cfg.name, ...this._ytSize() });
     } catch (e) {
       if (s.gen === gen) { s.yt = null; this._set(s, 'failed', e.message); }
       return null;
@@ -611,7 +613,9 @@ export class SourceManager extends Emitter {
       });
     }
     this.emit('media', s);
-    this._set(s, 'live', s.hasAudio ? 'YouTube video ready. Play it from here.' : 'YouTube video ready, without sound (the browser didn\'t share the tab\'s audio).');
+    this._set(s, 'live', s.hasAudio ? 'YouTube video ready. Play it from here; its sound goes to the programme only.'
+      : elementCapture() ? 'YouTube video ready, without sound (the browser didn\'t share the tab\'s audio).'
+        : 'YouTube video ready, picture only (Firefox can\'t share sound). Keep its player visible in the corner of the studio.');
   }
 
   _ytStatus(id, st) {

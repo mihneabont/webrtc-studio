@@ -3,7 +3,7 @@ import { el, fmtKbps, fmtRes, fmtMs, uid, relayWorksRemotely } from '../util.js'
 import { SOURCE_STATES, stateLabel } from '../sources.js';
 import { codecSupported } from '../rtc.js';
 import { field, text, num, select, check, linkBox, statLine, CardList } from './forms.js';
-import { parseYouTube, fmtClock } from '../youtube.js';
+import { parseYouTube, fmtClock, elementCapture } from '../youtube.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
 import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
@@ -119,7 +119,8 @@ function mountSourcesTab(app, root) {
         : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
       obs: `For encoders that publish with WHIP: OBS, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
       whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
-      youtube: 'Play a YouTube video as a source. Paste its link and click Connect: YouTube\'s own player loads inside the studio and is captured on its own, so nothing is downloaded. The browser asks once to share this tab; choose Allow. Then play, pause, seek and loop it from the source card. Only use videos you have the rights to broadcast.',
+      youtube: 'Play a YouTube video as a source. Paste its link and click Connect: YouTube\'s own player loads inside the studio and is captured on its own, so nothing is downloaded. The browser asks once to share this tab; choose Allow. Its sound goes to the programme only. Then play, pause, seek and loop it from the source card. Only use videos you have the rights to broadcast.'
+        + (elementCapture() ? '' : ' Firefox limits: picture only, no sound, and the player stays visible in a corner of the studio while connected. Chrome or Edge capture it hidden and with sound.'),
       srt: `For SRT senders: OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
     }[kind];
     intro.replaceChildren(text);
@@ -284,6 +285,9 @@ function mountSourcesTab(app, root) {
     const out = [field('YouTube link', el('div', { class: 'linkbox' }, url,
       el('button', { class: 'btn primary sm', onclick: connect }, s.stream ? 'Load' : 'Connect')))];
     if (s.cfg.ytUrl && !parseYouTube(s.cfg.ytUrl)) out.push(el('div', { class: 'card-detail bad' }, 'That isn\'t a YouTube video link.'));
+    if (!elementCapture()) {
+      out.push(el('div', { class: 'note warn' }, 'Firefox: the video is shared as picture only, without sound, and its player stays visible in a corner of the studio while connected (Firefox can\'t capture a hidden player or its sound). When asked, share this Firefox window. Chrome or Edge do it hidden and with sound.'));
+    }
     if (!s.stream || !st) return out;
     if (st.title) out.push(el('div', { class: 'yt-title', title: st.title }, st.title));
     // Progress bar: drag to seek; it follows playback while you are not dragging it.
@@ -296,7 +300,7 @@ function mountSourcesTab(app, root) {
       el('div', { class: 'btn-row' },
         el('button', { class: `btn ${playing ? '' : 'primary'}`, onclick: () => sources.ytCommand(s.id, playing ? 'pause' : 'play') }, playing ? 'Pause' : 'Play'),
         el('button', { class: 'btn', title: 'Back to the start and play', onclick: () => sources.ytCommand(s.id, 'restart') }, 'Restart'),
-        el('button', { class: `btn ${st.muted ? 'on' : ''}`, title: 'Silence this video (in the programme too)', onclick: () => sources.ytCommand(s.id, 'mute', !st.muted) }, st.muted ? 'Unmute' : 'Mute'),
+        s.hasAudio ? el('button', { class: `btn ${st.muted ? 'on' : ''}`, title: 'Silence this video in the programme', onclick: () => sources.ytCommand(s.id, 'mute', !st.muted) }, st.muted ? 'Unmute' : 'Mute') : null,
         check('Loop', !!s.cfg.ytLoop, (v) => sources.ytCommand(s.id, 'loop', v))),
       el('div', { class: 'btn-row' }, el('button', { class: 'btn sm', onclick: () => sources.disconnect(s.id) }, 'Disconnect')));
     return out;

@@ -65,8 +65,10 @@ browser.
    hidden inside the studio, and the studio captures just that player (Element
    Capture), so nothing is downloaded and no browser bar is in the picture. The
    browser asks once per source to share this tab. Play, pause, seek on the
-   progress bar, restart, mute and loop from the source card. Needs Chrome or
-   Edge 132 or later.
+   progress bar, restart, mute and loop from the source card. Its sound goes to
+   the programme only, not to this computer's speakers. Best in Chrome or Edge
+   132+. Firefox works with limits: picture only (no sound), the player stays
+   visible in a corner of the studio (draggable), and you share the Firefox window.
    **OBS or another WHIP encoder** can be a source too: choose *OBS / WHIP
    encoder*, and the card shows a Server URL and Bearer Token to paste into OBS
    (Settings → Stream → Service: WHIP). This needs the optional helper running

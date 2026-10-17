@@ -179,7 +179,7 @@ function renderStatus() {
   if (hw) alerts.push(['hardware', 'warn', hw]);
   // A YouTube source captures this tab's sound, which includes what MON plays: an echo loop.
   if (store.ws.audio.monitor === 'on' && srcs.some((s) => s.cfg.kind === 'youtube' && s.hasAudio)) {
-    alerts.push(['yt-monitor', 'warn', 'MON is on while a YouTube source captures this tab\'s sound, so the studio hears itself (echo). Turn MON off; you still hear the YouTube video directly.', 'Turn MON off', () => { store.ws.audio.monitor = 'off'; audio.applyMonitor(); store.save(); app.ui.emit('settings'); }]);
+    alerts.push(['yt-monitor', 'warn', 'MON is on while a YouTube source captures this tab\'s sound, so the programme would hear itself (echo). Turn MON off while a YouTube source is connected.', 'Turn MON off', () => { store.ws.audio.monitor = 'off'; audio.applyMonitor(); store.save(); app.ui.emit('settings'); }]);
   }
   for (const o of liveOuts) {
     const lim = o.stats?.out?.video?.limitation;
