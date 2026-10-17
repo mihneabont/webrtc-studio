@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube player · WebRTC Studio</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 15px/1.45 "Segoe UI", system-ui, sans-serif; color: #e7eaf0; }
+    #player, #player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    #start {
+      position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+      background: #0a0c10ee; text-align: center; padding: 24px;
+    }
+    #start[hidden] { display: none; }
+    #start button { font: 600 17px inherit; font-family: inherit; padding: 12px 26px; border: 0; border-radius: 8px; background: #e5484d; color: #fff; cursor: pointer; }
+    #start p { max-width: 520px; margin: 0; color: #8a93a6; }
+    #start .err { color: #ffb0b3; }
+  </style>
+</head>
+<body>
+  <div id="player"></div>
+  <div id="start">
+    <strong id="title">Loading the video…</strong>
+    <button id="go" type="button" hidden>Start</button>
+    <p id="hint">This window plays the video with YouTube's own player. The studio captures it as a source; nothing is downloaded.</p>
+  </div>
+  <script type="module" src="js/youtube-player.js"></script>
+</body>
+</html>

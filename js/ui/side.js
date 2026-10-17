@@ -3,6 +3,7 @@ import { el, fmtKbps, fmtRes, fmtMs, uid, relayWorksRemotely } from '../util.js'
 import { SOURCE_STATES, stateLabel } from '../sources.js';
 import { codecSupported } from '../rtc.js';
 import { field, text, num, select, check, linkBox, statLine, CardList } from './forms.js';
+import { parseYouTube, fmtClock } from '../youtube.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
 import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
@@ -54,6 +55,7 @@ const SOURCE_KINDS = {
   whep: { label: 'WHEP', icon: [...GLOBE, 'M19 14v7', 'M16 18l3 3 3-3'] },
   obs: { label: 'WHIP (via helper)', icon: [...GLOBE, 'M19 21v-7', 'M16 17l3-3 3 3'] },
   srt: { label: 'SRT (via helper)', icon: ['M12 13v8', 'M9 21h6', 'M8.5 9.5a5 5 0 0 1 7 0', 'M5.5 6.5a9 9 0 0 1 13 0', 'M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'] },
+  youtube: { label: 'YouTube', icon: ['M2.5 8.5a3 3 0 0 1 2.6-2.9C7.4 5.2 9.7 5 12 5s4.6.2 6.9.6a3 3 0 0 1 2.6 2.9 30 30 0 0 1 0 7 3 3 0 0 1-2.6 2.9c-2.3.4-4.6.6-6.9.6s-4.6-.2-6.9-.6a3 3 0 0 1-2.6-2.9 30 30 0 0 1 0-7z', 'M10 9.5v5l4.5-2.5z'] },
 };
 
 function kindIcon(paths) {
@@ -117,6 +119,7 @@ function mountSourcesTab(app, root) {
         : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
       obs: `For encoders that publish with WHIP: OBS, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
       whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
+      youtube: 'Play a YouTube video as a source. Paste its link and click Connect: a small window opens with YouTube\'s own player, and the studio captures that window, so nothing is downloaded. Play, pause and loop it from here. Only use videos you have the rights to broadcast.',
       srt: `For SRT senders: OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
     }[kind];
     intro.replaceChildren(text);
@@ -140,7 +143,7 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn sm', onclick: () => switcher.setPreview({ kind: 'source', id: s.id }) }, 'Preview'));
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
-      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · WHIP via helper' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · invite link, relay' : ' · invite link, copy-paste',
+      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · WHIP via helper' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.kind === 'youtube' ? ' · YouTube' : s.cfg.mode === 'relay' ? ' · invite link, relay' : ' · invite link, copy-paste',
       s.info?.device ? ` · ${s.info.device}` : '',
       s.pc && s.paused?.video ? el('span', { class: 'paused-chip' }, 'camera off') : null,
       s.pc && s.paused?.audio ? el('span', { class: 'paused-chip' }, 'mic off') : null);
@@ -169,6 +172,8 @@ function mountSourcesTab(app, root) {
           el('button', { class: 'btn primary', onclick: () => invite(s) }, live ? 'Reconnect (new invite)' : 'Create invite'),
           live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
       }
+    } else if (s.cfg.kind === 'youtube') {
+      actions.push(...ytActions(s));
     } else if (s.cfg.kind === 'srt') {
       actions.push(...srtActions(s));
     } else if (s.cfg.kind === 'obs') {
@@ -270,6 +275,32 @@ function mountSourcesTab(app, root) {
     return lan.find((a) => a.startsWith('192.168.')) || lan.find((a) => a.startsWith('10.')) || lan[0] || null;
   }
 
+  // YouTube: a link, Connect, then playback controls once the player window is shared.
+  function ytActions(s) {
+    const url = text(s.cfg.ytUrl || '', (v) => sources.update(s.id, { ytUrl: v.trim() }), { type: 'url', placeholder: 'https://www.youtube.com/watch?v=…', autocomplete: 'off' });
+    const connect = () => { errors.delete(s.id); sources.connectYouTube(s.id, url.value); };
+    url.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+    const st = s.yt?.status;
+    const live = !!s.stream;
+    const out = [field('YouTube link', el('div', { class: 'linkbox' }, url,
+      el('button', { class: 'btn primary sm', onclick: connect }, s.yt ? 'Reload' : 'Connect')))];
+    if (s.cfg.ytUrl && !parseYouTube(s.cfg.ytUrl)) out.push(el('div', { class: 'card-detail bad' }, 'That isn\'t a YouTube video link.'));
+    if (st?.title) out.push(el('div', { class: 'yt-title', title: st.title }, st.title));
+    if (st && !st.error) {
+      const playing = st.state === 'playing' || st.state === 'buffering';
+      out.push(el('div', { class: 'btn-row' },
+        el('button', { class: 'btn', onclick: () => sources.ytCommand(s.id, playing ? 'pause' : 'play') }, playing ? 'Pause' : 'Play'),
+        el('button', { class: 'btn', title: 'Back to the start and play', onclick: () => sources.ytCommand(s.id, 'restart') }, 'Restart'),
+        check('Loop', !!s.cfg.ytLoop, (v) => sources.ytCommand(s.id, 'loop', v)),
+        el('span', { class: 'yt-time mono small muted', dataset: { sid: s.id } }, `${fmtClock(st.time)} / ${fmtClock(st.duration)}`)));
+    }
+    const btns = [];
+    if (s.yt && !live) btns.push(el('button', { class: 'btn', onclick: () => sources.ytShow(s.id) }, 'Show player window'));
+    if (s.yt) btns.push(el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, live ? 'Disconnect' : 'Close player'));
+    if (btns.length) out.push(el('div', { class: 'btn-row' }, btns));
+    return out;
+  }
+
   function srtActions(s) {
     const guard = helperGuard(
       'A web page can\'t receive SRT. The helper on this computer listens for the SRT sender and converts the stream to WebRTC for this page with ffmpeg. ',
@@ -339,6 +370,11 @@ function mountSourcesTab(app, root) {
   sources.on('removed', renderAll);
   sources.on('reordered', renderAll);
   sources.on('change', (s) => cards.refresh(s));
+  sources.on('yt', (s) => { // playback time, without redrawing the card
+    const t = root.querySelector(`.yt-time[data-sid="${s.id}"]`);
+    const st = s.yt?.status;
+    if (t && st) t.textContent = `${fmtClock(st.time)} / ${fmtClock(st.duration)}`;
+  });
   sources.on('stats', (s) => {
     const slot = cards.cards.get(s.id)?.querySelector('.stats-slot');
     if (slot) slot.replaceChildren(statsFor(s));

@@ -278,3 +278,5 @@ details[open] summary { margin-bottom: 6px; }
 .btn-icon { display: inline-flex; align-items: center; gap: 5px; }
 .btn-icon svg { width: 14px; height: 14px; flex: none; }
 .paused-chip { margin-left: 6px; padding: 0 6px; border-radius: 99px; background: #3a2a0b; color: #ffd28a; font-size: 10px; }
+.kind-row .kind-btn:last-child:nth-child(odd) { grid-column: 1 / -1; justify-content: center; }
+.yt-title { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

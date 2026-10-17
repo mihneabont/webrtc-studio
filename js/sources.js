@@ -9,6 +9,7 @@
 // the others.
 import { Emitter, uid, relayWorksRemotely } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
+import { parseYouTube } from './youtube.js';
 import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whepSubscribe, httpTeardown, sdpCodecs } from './rtc.js';
 
 export const SOURCE_STATES = {
@@ -25,6 +26,7 @@ export const SOURCE_STATES = {
 export function stateLabel(s) {
   if (s.cfg.kind === 'obs' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for encoder';
   if (s.cfg.kind === 'srt' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for SRT sender';
+  if (s.cfg.kind === 'youtube' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for player';
   return SOURCE_STATES[s.state] || s.state;
 }
 
@@ -62,6 +64,12 @@ export class SourceManager extends Emitter {
     window.addEventListener('pagehide', () => {
       for (const s of this.list.values()) if (s.resourceUrl) httpTeardown(s.resourceUrl, s.token, { keepalive: true });
     });
+    // YouTube sources: the player window (youtube.html) hands over its captured
+    // stream through this function, and reports playback with postMessage.
+    window.__studioYouTubeStream = (sid, stream) => this._ytStream(sid, stream);
+    window.addEventListener('message', (e) => {
+      if (e.origin === location.origin && e.data?.type === 'yt-status') this._ytStatus(e.data);
+    });
   }
 
   get ws() { return this.store.ws; }
@@ -85,6 +93,7 @@ export class SourceManager extends Emitter {
       mode: mode || (relayWorksRemotely(this.ws.settings.signalingUrl) ? 'relay' : 'manual'), whepUrl,
     };
     if (kind === 'obs' || kind === 'srt') { cfg.mode = 'relay'; cfg.token = uid(12); }
+    if (kind === 'youtube') Object.assign(cfg, { mode: 'youtube', ytUrl: '', ytLoop: false });
     if (kind === 'srt') {
       const used = new Set(this.ws.sources.map((c) => c.srtPort));
       let port = 9000; while (used.has(port)) port++;
@@ -103,6 +112,7 @@ export class SourceManager extends Emitter {
     if (!s) return;
     this._teardown(s, 'removed');
     if (s.cfg.kind === 'srt') this.stopSrt(s);
+    if (s.cfg.kind === 'youtube') this._ytClose(s);
     this.list.delete(id);
     this.ws.sources = this.ws.sources.filter((c) => c.id !== id);
     delete this.ws.audio.channels[id];
@@ -234,6 +244,7 @@ export class SourceManager extends Emitter {
     this._teardown(s, 'disconnect');
     if (s.cfg.kind === 'obs') s.blocked = true;
     if (s.cfg.kind === 'srt') { this.stopSrt(s); this.update(s.id, { srtOn: false }); }
+    if (s.cfg.kind === 'youtube') this._ytClose(s);
     this._set(s, 'offline', s.cfg.kind === 'obs' ? 'Disconnected by operator. Encoder connections are refused until you click Accept encoder.'
       : s.cfg.kind === 'srt' ? 'Stopped. The helper is not listening for this SRT source.' : 'Disconnected by operator.');
   }
@@ -434,6 +445,7 @@ export class SourceManager extends Emitter {
     s.retries = 0;
     if (s.cfg.kind === 'whep') return this.connectWhep(id);
     if (s.cfg.kind === 'srt') return this.startSrt(id);
+    if (s.cfg.kind === 'youtube') return this.connectYouTube(id);
     if (s.cfg.kind === 'obs') {
       s.blocked = false;
       this._teardown(s, 'reconnect');
@@ -537,6 +549,74 @@ export class SourceManager extends Emitter {
     clearInterval(s.srt.poll);
     fetch(s.srt.url, { method: 'DELETE' }).catch(() => {});
     s.srt = null;
+  }
+
+  // YouTube ------------------------------------------------------------------
+  // The video plays in YouTube's own player in a small window (youtube.html);
+  // that window captures itself (tab capture, after one click on Start) and
+  // hands the stream over. Nothing is downloaded.
+
+  /** Open (or reopen) the player window. Call from a click: browsers block pop-ups otherwise. */
+  connectYouTube(id, url) {
+    const s = this.list.get(id);
+    if (!s || s.cfg.kind !== 'youtube') return null;
+    if (url !== undefined) this.update(id, { ytUrl: url.trim() });
+    const v = parseYouTube(s.cfg.ytUrl);
+    if (!v) { this._set(s, 'failed', 'That isn\'t a YouTube video link. Paste a link like https://www.youtube.com/watch?v=… or https://youtu.be/…'); return null; }
+    const p = new URLSearchParams({ sid: s.id, v: v.id, t: String(v.start), name: s.cfg.name, loop: s.cfg.ytLoop ? '1' : '0' });
+    const win = window.open(new URL(`youtube.html#${p}`, location.href).toString(), `studio-yt-${s.id}`, 'popup,width=960,height=540');
+    if (!win) { this._set(s, 'failed', 'The browser blocked the player window. Allow pop-ups for this page, then click Connect again.'); return null; }
+    this._teardown(s, 'reconnect');
+    s.yt = { win, status: null, videoId: v.id };
+    this._set(s, 'waiting', 'In the player window that opened, click Start and choose Allow to share it with the studio.');
+    return win;
+  }
+
+  ytCommand(id, cmd, arg) {
+    const s = this.list.get(id);
+    if (cmd === 'loop') this.update(id, { ytLoop: !!arg });
+    try { s?.yt?.win?.postMessage({ type: 'yt-cmd', sid: id, cmd, arg }, location.origin); } catch { /* window closed */ }
+  }
+
+  /** Bring the player window to the front (to click Start again, for example). */
+  ytShow(id) { try { this.list.get(id)?.yt?.win?.focus(); } catch { /* closed */ } }
+
+  _ytStream(sid, stream) {
+    const s = this.list.get(sid);
+    if (!s || s.cfg.kind !== 'youtube') { for (const t of stream.getTracks()) t.stop(); return; }
+    if (s.stream) for (const t of s.stream.getTracks()) t.stop();
+    s.gen++;
+    const gen = s.gen;
+    s.stream = stream;
+    s.hasVideo = stream.getVideoTracks().length > 0;
+    s.hasAudio = stream.getAudioTracks().length > 0;
+    s.videoFlowing = s.hasVideo; s.audioFlowing = s.hasAudio;
+    for (const t of stream.getTracks()) {
+      t.addEventListener('ended', () => {
+        if (s.gen !== gen) return;
+        s.stream = null; s.hasVideo = s.hasAudio = s.videoFlowing = s.audioFlowing = false;
+        this.emit('media', s);
+        this._set(s, 'ended', 'The player window stopped sharing. Click Connect to start it again.');
+      });
+    }
+    this.emit('media', s);
+    this._set(s, 'live', s.hasAudio ? 'Playing through YouTube\'s player window.' : 'Playing through YouTube\'s player window, without sound (this browser can\'t share a window\'s audio).');
+  }
+
+  _ytStatus(m) {
+    const s = this.list.get(m.sid);
+    if (!s || s.cfg.kind !== 'youtube') return;
+    if (!s.yt) s.yt = { win: null, status: null };
+    const before = s.yt.status;
+    s.yt.status = m;
+    if (m.error) { this._set(s, 'failed', m.error); return; }
+    if (!before || before.state !== m.state || before.title !== m.title || before.captured !== m.captured || before.loop !== m.loop) this.emit('change', s);
+    this.emit('yt', s);
+  }
+
+  _ytClose(s) {
+    try { s.yt?.win?.close(); } catch { /* already closed */ }
+    s.yt = null;
   }
 
   // Data channel to the contributor: tally lights and names.
