@@ -18,7 +18,7 @@ export function mountMultiview(app, root) {
   const grid = el('div', { class: 'mv-grid' });
   root.append(
     el('div', { class: 'mv-head' }, el('span', { class: 'mv-title' }, 'Multiview'), seg, pager,
-      el('span', { class: 'muted small', style: { marginLeft: 'auto' } }, 'Click: preview · Double-click: full screen · keys 1–9')),
+      el('span', { class: 'muted small', style: { marginLeft: 'auto' } }, 'Click: preview · keys 1–9')),
     grid, holder);
 
   function tileFor(s) {
@@ -36,9 +36,8 @@ export function mountMultiview(app, root) {
     const node = el('div', { class: 'tile', title: '' }, video, diag,
       el('div', { class: 'tile-top' }, num, dot, name, tally), el('div', { class: 'tile-meter' }, meter), bottom);
     node.addEventListener('click', () => switcher.setPreview({ kind: 'source', id: s.id }));
-    node.addEventListener('dblclick', () => {
-      if (document.fullscreenElement) document.exitFullscreen(); else node.requestFullscreen?.().catch(() => {});
-    });
+    // A double-click is just two clicks (preview): no full screen, no text selection.
+    node.addEventListener('mousedown', (e) => { if (e.detail > 1) e.preventDefault(); });
     t = { node, video, num, dot, name, tally, bottom, meter, diag };
     tiles.set(s.id, t);
     bindMedia(s);
