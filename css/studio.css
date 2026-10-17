@@ -275,3 +275,5 @@ details[open] summary { margin-bottom: 6px; }
 .empty-state[hidden] { display: none; }
 .empty-state svg { width: 32px; height: 32px; color: var(--faint); }
 .empty-state .empty-title { color: var(--text); font-weight: 600; font-size: 13px; }
+.btn-icon { display: inline-flex; align-items: center; gap: 5px; }
+.btn-icon svg { width: 14px; height: 14px; flex: none; }

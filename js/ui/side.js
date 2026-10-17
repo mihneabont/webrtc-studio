@@ -99,7 +99,7 @@ function mountSourcesTab(app, root) {
   root.append(
     el('div', { class: 'section-title' }, 'Add source'),
     el('div', { class: 'card add-source' }, kindRow, intro,
-      el('div', { class: 'btn-row' }, nameIn, el('button', { class: 'btn primary', onclick: add }, 'Add'))),
+      el('div', { class: 'btn-row' }, nameIn, el('button', { class: 'btn primary btn-icon', onclick: add }, kindIcon(['M12 5v14', 'M5 12h14']), 'Add'))),
     el('div', { class: 'section-title' }, 'Sources'),
     empty,
     list);
