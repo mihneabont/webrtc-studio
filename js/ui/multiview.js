@@ -26,6 +26,8 @@ export function mountMultiview(app, root) {
     if (t) return t;
     const video = el('video', { muted: true, playsInline: true, autoplay: true });
     video.muted = true;
+    // Mixer mode: sources that live on the mixer are drawn from its multiview stream.
+    const feed = el('canvas', { class: 'mv-feed', width: 320, height: 180, hidden: true });
     const num = el('span', { class: 'tile-num' });
     const dot = el('span', { class: 'dot' });
     const name = el('span', { class: 'tile-name' });
@@ -33,13 +35,13 @@ export function mountMultiview(app, root) {
     const bottom = el('div', { class: 'tile-bottom mono' });
     const meter = el('i');
     const diag = el('div', { class: 'tile-diag' });
-    const node = el('div', { class: 'tile', title: '' }, video, diag,
+    const node = el('div', { class: 'tile', title: '' }, video, feed, diag,
       el('div', { class: 'tile-top' }, num, dot, name, tally), el('div', { class: 'tile-meter' }, meter), bottom);
     node.addEventListener('click', () => switcher.setPreview({ kind: 'source', id: s.id }));
     node.addEventListener('dblclick', () => {
       if (document.fullscreenElement) document.exitFullscreen(); else node.requestFullscreen?.().catch(() => {});
     });
-    t = { node, video, num, dot, name, tally, bottom, meter, diag };
+    t = { node, video, feed, num, dot, name, tally, bottom, meter, diag };
     tiles.set(s.id, t);
     bindMedia(s);
     updateTile(s);
@@ -51,6 +53,10 @@ export function mountMultiview(app, root) {
     if (!t) return;
     if (t.video.srcObject !== s.stream) t.video.srcObject = s.stream || null;
     if (s.stream) t.video.play().catch(() => {});
+    const remote = !!app.mixer?.active && !s.stream;
+    t.feed.hidden = !remote;
+    if (remote) app.mixer.attach(t.feed, () => app.mixer.tileRect(s.id));
+    else app.mixer?.detach(t.feed);
   }
 
   function updateTile(s) {
@@ -63,6 +69,8 @@ export function mountMultiview(app, root) {
     let diag = null;
     if (s.state !== 'live') {
       diag = [el('b', {}, stateLabel(s).toUpperCase()), el('span', {}, s.detail || '')];
+    } else if (app.mixer?.active && !s.stream) {
+      diag = null; // drawn from the mixer
     } else if (!s.hasVideo) {
       diag = [el('b', {}, 'AUDIO ONLY'), el('span', {}, 'This source sends no video.')];
     } else if (!s.videoFlowing) {
@@ -78,6 +86,7 @@ export function mountMultiview(app, root) {
     if (!t) return;
     const v = s.stats?.in.video, a = s.stats?.in.audio, p = s.stats?.pair;
     if (!s.stats) { t.bottom.replaceChildren(); return; }
+    if (!s.stats.in) return;
     t.bottom.replaceChildren(
       el('span', {}, fmtRes(v?.width, v?.height)),
       el('span', {}, v?.fps !== undefined ? `${Math.round(v.fps)}fps` : '–'),
@@ -142,13 +151,24 @@ export function mountMultiview(app, root) {
   sources.on('reordered', () => { layout(); for (const s of sources.all()) updateTile(s); });
   sources.on('removed', (id) => {
     const t = tiles.get(id);
-    if (t) { t.video.srcObject = null; t.node.remove(); tiles.delete(id); }
+    if (t) { t.video.srcObject = null; app.mixer?.detach(t.feed); t.node.remove(); tiles.delete(id); }
     layout();
     for (const s of sources.all()) updateTile(s);
   });
   sources.on('change', updateTile);
   sources.on('media', (s) => { bindMedia(s); updateTile(s); });
   sources.on('stats', updateStats);
+  app.mixer?.on('state', () => { for (const s of sources.all()) bindMedia(s); });
+  // Mixer sources: resolution and how they arrive, from the mixer's status.
+  app.mixer?.on('status', (m) => {
+    for (const s of sources.all()) {
+      const t = tiles.get(s.id), st = m.sources?.[s.id];
+      if (!t || s.stream || !st) continue;
+      const ing = st.ingest || {};
+      t.bottom.replaceChildren(el('span', {}, fmtRes(st.width, st.height)), el('span', {}, (ing.protocol || '').toUpperCase()),
+        ing.kbps ? el('span', {}, fmtKbps(ing.kbps)) : '');
+    }
+  });
   switcher.on('change', updateTally);
   app.ui.on('levels', (lv) => {
     for (const [id, t] of tiles) {

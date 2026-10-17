@@ -7,6 +7,7 @@ import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
 import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
 import { mountHelperPanel } from './helper-panel.js';
+import { mountMixerPanel } from './mixer-panel.js';
 
 
 const TABS = { sources: 'Sources', scenes: 'Scenes', graphics: 'Graphics', outputs: 'Outputs', settings: 'Settings' };
@@ -50,11 +51,22 @@ function mountSourcesTab(app, root) {
   const errors = new Map();
 
   const nameIn = el('input', { type: 'text', placeholder: 'Source name, e.g. Camera 1' });
-  const kindSel = select({ peer: 'Contributor (browser link)', obs: 'OBS / WHIP encoder', srt: 'SRT (via helper)', whep: 'WHEP endpoint' }, 'peer', () => {});
+  const KINDS = { peer: 'Contributor (browser link)', obs: 'OBS / WHIP encoder', srt: 'SRT (via helper)', whep: 'WHEP endpoint' };
+  const MIXER_KINDS = { peer: 'Contributor (browser link)', obs: 'OBS / WHIP encoder', srt: 'SRT', rtmp: 'RTMP', whep: 'WHEP endpoint' };
+  const kindBox = el('span');
+  let kindSel;
+  const renderKinds = () => {
+    const was = kindSel?.value || 'peer';
+    const opts = app.mixer?.active ? MIXER_KINDS : KINDS;
+    kindSel = select(opts, opts[was] ? was : 'peer', () => {});
+    kindBox.replaceChildren(kindSel);
+  };
+  renderKinds();
   const add = () => {
     const s = sources.add({ name: nameIn.value.trim(), kind: kindSel.value });
     nameIn.value = '';
     if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') invite(s);
+    if (app.mixer?.active) return;
     if (s.cfg.kind === 'obs' && store.ws.settings.signalingUrl) sources.reconnect(s.id);
     if (s.cfg.kind === 'srt' && store.ws.settings.signalingUrl) sources.startSrt(s.id);
   };
@@ -64,7 +76,7 @@ function mountSourcesTab(app, root) {
   const list = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
   root.append(
     el('div', { class: 'section-title' }, 'Add source'),
-    el('div', { class: 'card' }, el('div', { class: 'btn-row' }, nameIn, kindSel, el('button', { class: 'btn primary', onclick: add }, 'Add'))),
+    el('div', { class: 'card' }, el('div', { class: 'btn-row' }, nameIn, kindBox, el('button', { class: 'btn primary', onclick: add }, 'Add'))),
     intro,
     el('div', { class: 'section-title' }, 'Sources'),
     list);
@@ -93,6 +105,7 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn sm', onclick: () => switcher.setPreview({ kind: 'source', id: s.id }) }, 'Preview'));
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
+      onMixer(s) ? ` · ${{ obs: 'WHIP', srt: 'SRT', rtmp: 'RTMP' }[s.cfg.kind]} to the mixer` : s.cfg.kind === 'rtmp' ? ' · RTMP (needs the mixer)' :
       s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · OBS / WHIP encoder' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · relay signaling' : ' · copy-paste signaling',
       s.info?.device ? ` · ${s.info.device}` : '');
     const detail = el('div', { class: `card-detail ${s.state === 'failed' ? 'bad' : ''}` }, s.detail || '');
@@ -101,7 +114,11 @@ function mountSourcesTab(app, root) {
 
     const actions = [];
     const live = !!s.pc;
-    if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') {
+    if (onMixer(s)) {
+      actions.push(...mixerActions(s));
+    } else if (s.cfg.kind === 'rtmp') {
+      actions.push(el('div', { class: 'note warn' }, 'RTMP senders connect to the Studio Mixer. Connect one in Settings, Studio Mixer, and this card shows the address to use.'));
+    } else if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') {
       if (s.state === 'invited' && s.invite) {
         const ta = el('textarea', { rows: 3, placeholder: 'Paste the reply code from the contributor page' });
         ta.value = drafts.get(s.id) || '';
@@ -152,6 +169,37 @@ function mountSourcesTab(app, root) {
     return el('div', { class: `card ${s.state === 'live' ? 'live' : s.state === 'failed' ? 'failed' : ''}`, dataset: { id: s.id } },
       head, state, detail, err, stats, ...actions, settings);
   });
+
+  function onMixer(s) { return !!app.mixer?.active && ['obs', 'srt', 'rtmp'].includes(s.cfg.kind); }
+
+  // OBS, SRT and RTMP senders publish straight to the mixer, each source with its own key.
+  function mixerActions(s) {
+    const out = [];
+    const addrs = app.mixer.addresses(s);
+    for (const a of addrs) {
+      if (addrs.length > 1) out.push(el('div', { class: 'small muted' }, `${a.label}:`));
+      if (s.cfg.kind === 'obs') {
+        out.push(field('Server', linkBox(a.whip, 'Copy')));
+      } else if (s.cfg.kind === 'srt') {
+        out.push(field('SRT address', linkBox(a.srt, 'Copy')));
+      } else {
+        out.push(field('Server', linkBox(a.rtmpServer, 'Copy')), field('Stream key', linkBox(a.rtmpKey, 'Copy')));
+      }
+    }
+    if (s.cfg.kind === 'obs') {
+      out.push(field('Bearer Token', linkBox(app.mixer.token(s.cfg), 'Copy')),
+        el('div', { class: 'small muted' }, 'In OBS: Settings → Stream → Service: WHIP. Use an H.264 encoder, keyframe interval 1-2 s. Start Streaming and the source appears by itself.'));
+    } else if (s.cfg.kind === 'srt') {
+      out.push(el('div', { class: 'small muted' }, 'The sender connects to the mixer as caller (in OBS: Settings → Stream → Custom, or as a recording output). The key is part of the address, so keep it private. From outside your network, the mixer\'s SRT port must be forwarded to the mixer computer (UDP).'));
+    } else {
+      out.push(el('div', { class: 'small muted' }, 'In OBS: Settings → Stream → Service: Custom. Paste the server and stream key. From outside your network, the mixer\'s RTMP port must be forwarded to the mixer computer (TCP).'));
+    }
+    out.push(el('div', { class: 'btn-row' }, el('button', { class: 'btn sm', title: 'Invalidate the old key: the sender has to use the new address', onclick: () => {
+      if (!confirm('Make a new key? The sender has to be set up again with the new address.')) return;
+      app.mixer.newToken(s); cards.refresh(s);
+    } }, 'New key')));
+    return out;
+  }
 
   // A helper reached as localhost gives OBS on this computer a working URL, but a
   // phone needs this computer's network address instead.
@@ -292,6 +340,7 @@ function mountSourcesTab(app, root) {
   switcher.on('change', () => { for (const s of sources.all()) cards.refresh(s); });
   app.ui.on('settings', renderAll);
   app.ui.on('relay', renderAll);
+  app.mixer?.on('state', () => { renderKinds(); renderAll(); });
   renderAll();
 }
 
@@ -322,6 +371,7 @@ function mountSettingsTab(app, root) {
     ['Secure context', window.isSecureContext ? 'yes' : 'no'],
   ];
 
+  mountMixerPanel(app, root);
   mountHelperPanel(app, root);
   root.append(
     el('div', { class: 'section-title' }, 'Connection infrastructure (all optional)'),

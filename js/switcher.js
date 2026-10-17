@@ -19,6 +19,7 @@ export class Switcher extends Emitter {
     this.trans = null; // {from, to, type, dur, start, manual, pos}
     this.ftb = { black: false, v: 0, from: 0, to: 0, start: 0, dur: 0 };
     this.keys = new Map(); // overlay id -> {on, v, from, to, start, dur}
+    this.remote = null; // MixerLink while a Studio Mixer does the switching
     this._syncAudio(0);
   }
 
@@ -33,6 +34,7 @@ export class Switcher extends Emitter {
 
   setPreview(shot) {
     if (shotEq(shot, this.preview)) return;
+    this.remote?.preview(shot);
     this.preview = shot;
     this._persist();
     this.emit('change');
@@ -43,6 +45,7 @@ export class Switcher extends Emitter {
   }
 
   cut() {
+    if (this.remote) return this.remote.cmd('cut');
     if (this.trans) return this._complete();
     if (!this.preview) return;
     const old = this.programme;
@@ -55,6 +58,7 @@ export class Switcher extends Emitter {
   }
 
   auto() {
+    if (this.remote) return this.remote.cmd('auto');
     if (this.trans) return; // already running
     if (!this.preview) return;
     if (shotEq(this.preview, this.programme) && this.tset.type !== 'dip') return this.cut();
@@ -66,6 +70,7 @@ export class Switcher extends Emitter {
   // Manual T-bar: pos 0..1. Reaching 1 completes the take.
   tbar(pos) {
     pos = clamp(pos, 0, 1);
+    if (this.remote) return this.remote.cmd('tbar', { pos });
     if (!this.trans) {
       if (pos <= 0 || !this.preview) return;
       this.trans = { from: this.programme, to: this.preview, type: this.tset.type, dur: 0, start: 0, manual: true, pos };
@@ -91,6 +96,7 @@ export class Switcher extends Emitter {
   }
 
   toggleFtb() {
+    if (this.remote) return this.remote.cmd('ftb');
     const now = performance.now();
     const black = !this.ftb.black;
     const dur = Math.max(1, this.tset.duration);
@@ -102,10 +108,30 @@ export class Switcher extends Emitter {
   setKey(id, on, durMs = 500) {
     const k = this.keys.get(id) || { on: false, v: 0 };
     if (k.on === on) return;
+    if (this.remote) return this.remote.cmd('key', { id, on, dur: durMs });
     this.keys.set(id, { on, v: k.v, from: k.v, to: on ? 1 : 0, start: performance.now(), dur: durMs });
     this.emit('change');
   }
   keyOn(id) { return !!this.keys.get(id)?.on; }
+
+  // Mixer mode: the mixer reports where the bus is; mirror it so tally, buttons and the T-bar follow.
+  applyRemote({ preview, programme, trans, ftb, keys }) {
+    let changed = !shotEq(preview, this.preview) || !shotEq(programme, this.programme) || !!trans !== !!this.trans ||
+      (trans && (trans.type !== this.trans.type || trans.manual !== this.trans.manual)) || !!ftb?.black !== this.ftb.black;
+    if (!shotEq(preview, this.preview) || !shotEq(programme, this.programme)) {
+      this.preview = preview;
+      this.programme = programme;
+      this._persist();
+    }
+    // Held as a manual transition at the mixer's position, so plan() never completes it here.
+    this.trans = trans ? { from: programme, to: preview, type: trans.type, dur: 0, start: 0, manual: true, pos: trans.pos, remoteManual: trans.manual } : null;
+    if (ftb) this.ftb = { black: !!ftb.black, v: ftb.v, from: ftb.v, to: ftb.v, start: 0, dur: 1 };
+    for (const [id, on] of Object.entries(keys || {})) {
+      if (this.keyOn(id) !== !!on) changed = true;
+      this.keys.set(id, { on: !!on, v: on ? 1 : 0, from: 0, to: on ? 1 : 0, start: 0, dur: 1 });
+    }
+    if (changed) this.emit('change');
+  }
 
   // Called by the compositor once per programme frame.
   plan(now = performance.now()) {

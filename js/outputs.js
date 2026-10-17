@@ -50,6 +50,7 @@ export class OutputManager extends Emitter {
     this.audio = audio;
     this.relay = null;
     this.helper = () => null; // set by the app: base URL of the helper, if any
+    this.remote = null; // MixerLink in mixer mode: the mixer sends RTMP, SRT, WHIP and Twitch outputs itself
     this.list = new Map();
     for (const cfg of store.ws.outputs) this._makeRuntime(cfg);
     this._timer = setInterval(() => this._sampleAll(), 1000);
@@ -62,7 +63,14 @@ export class OutputManager extends Emitter {
   }
 
   get ws() { return this.store.ws; }
-  get stream() { return new MediaStream([this.compositor.track, this.audio.outputTrack]); }
+  get stream() { return new MediaStream(this._tracks()); }
+  // Programme tracks: this page's compositor and mixer, or in mixer mode the programme fetched back from the mixer.
+  _tracks() {
+    const ps = this.remote?.program?.stream;
+    if (ps) return [ps.getVideoTracks()[0] || this.compositor.track, ps.getAudioTracks()[0] || this.audio.outputTrack];
+    return [this.compositor.track, this.audio.outputTrack];
+  }
+  remoteKind(o) { return !!this.remote && ['rtmp', 'twitch', 'whip', 'srt'].includes(o.cfg.kind); }
   get(id) { return this.list.get(id); }
   all() { return this.ws.outputs.map((c) => this.list.get(c.id)).filter(Boolean); }
   liveCount() { return this.all().filter((o) => o.state === 'live').length; }
@@ -76,7 +84,7 @@ export class OutputManager extends Emitter {
   add({ kind = 'peer', name, url = '' }) {
     const h = this.ws.settings.format.height;
     const cfg = {
-      id: uid(4), kind, name: name || (kind === 'twitch' ? 'Twitch' : kind === 'whip' ? 'WHIP output' : kind === 'rtmp' ? 'RTMP output' : `Receiver ${this.ws.outputs.length + 1}`),
+      id: uid(4), kind, name: name || (kind === 'twitch' ? 'Twitch' : kind === 'whip' ? 'WHIP output' : kind === 'rtmp' ? 'RTMP output' : kind === 'srt' ? 'SRT output' : `Receiver ${this.ws.outputs.length + 1}`),
       mode: relayWorksRemotely(this.ws.settings.signalingUrl) ? 'relay' : 'manual',
       url: kind === 'twitch' ? TWITCH.url : url,
       maxKbps: kind === 'twitch' ? Math.min(TWITCH.defaultKbps, defaultKbps(h)) : defaultKbps(h),
@@ -140,13 +148,14 @@ export class OutputManager extends Emitter {
     o.pc = pc;
     o.sampler = new StatsSampler(pc);
     o.stats = null;
-    const stream = this.stream;
+    const [vtrack, atrack] = this._tracks();
+    const stream = new MediaStream([vtrack, atrack]);
     const fps = this.ws.settings.format.fps;
-    const vt = pc.addTransceiver(this.compositor.track, {
+    const vt = pc.addTransceiver(vtrack, {
       direction: 'sendonly', streams: [stream],
       sendEncodings: [{ maxBitrate: o.cfg.maxKbps * 1000, maxFramerate: fps }],
     });
-    const at = pc.addTransceiver(this.audio.outputTrack, { direction: 'sendonly', streams: [stream], sendEncodings: [{ maxBitrate: 128000 }] });
+    const at = pc.addTransceiver(atrack, { direction: 'sendonly', streams: [stream], sendEncodings: [{ maxBitrate: 128000 }] });
     const want = o.cfg.codec === 'auto' ? null : `video/${o.cfg.codec.toUpperCase()}`;
     if (want && !preferCodec(vt, want, { only: o.cfg.kind === 'twitch' })) {
       throw new Error(`This browser cannot send ${o.cfg.codec.toUpperCase()} video${o.cfg.kind === 'twitch' ? ', which Twitch requires' : ''}.`);
@@ -199,6 +208,8 @@ export class OutputManager extends Emitter {
     o.startedAt = null;
     if (token !== undefined) o.token = token;
     try {
+      if (this.remoteKind(o)) { this.remote.startOutput(o); return null; }
+      if (this.remote && o.cfg.kind === 'peer') await this.remote.ensureProgram();
       if (o.cfg.kind === 'peer') {
         if (o.cfg.mode === 'relay') {
           if (!this.relay) throw new Error('Relay signaling is selected but no signaling server is configured.');
@@ -209,6 +220,7 @@ export class OutputManager extends Emitter {
         }
         return await this._invite(o);
       }
+      if (o.cfg.kind === 'srt') throw new Error('SRT outputs are sent by the Studio Mixer. Connect one in Settings.');
       if (o.cfg.kind === 'rtmp') return await this._rtmp(o);
       return await this._whip(o);
     } catch (e) {
@@ -379,6 +391,7 @@ export class OutputManager extends Emitter {
     if (!o) return;
     o.wasLive = false;
     o.retries = 0;
+    if (this.remoteKind(o)) { this.remote.stopOutput(o); if (!silent) this._set(o, 'stopped', 'Stopped by operator.'); return; }
     if (o.cfg.kind === 'peer' && o.cfg.mode === 'relay') this.relay?.send(`out-${o.id}`, { type: 'bye' }).catch(() => {});
     this._close(o);
     o.stats = null;
@@ -408,6 +421,7 @@ export class OutputManager extends Emitter {
         return;
       }
       try {
+        if (this.remote) await this.remote.ensureProgram();
         const { pc, gen } = this._newPc(o);
         this._set(o, 'connecting', 'Receiver is online. Negotiating…');
         await pc.setLocalDescription(await pc.createOffer());

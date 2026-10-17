@@ -94,7 +94,7 @@ class MediaMTX:
                     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
                     self.proc = subprocess.Popen([self.settings.mediamtx_bin, str(self.config_path)],
                                                  stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                                 creationflags=flags)
+                                                 creationflags=flags, cwd=self.settings.data_dir)  # it writes files next to itself
                     self._pid_file.write_text(str(self.proc.pid))
                     code = self.proc.wait()
             except OSError as exc:
@@ -179,7 +179,7 @@ class MediaMTX:
                 src.get("type"), src.get("type"))}
             for track in p.get("tracks2") or []:
                 props = track.get("codecProps") or {}
-                if "width" in props:
+                if "width" in props or track.get("codec") in ("VP8", "VP9", "AV1", "H264", "H265"):
                     stats.update(video_codec=track.get("codec"), width=props.get("width"), height=props.get("height"))
                 else:
                     stats["audio_codec"] = track.get("codec")

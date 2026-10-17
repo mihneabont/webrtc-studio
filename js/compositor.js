@@ -27,6 +27,7 @@ export class Compositor extends Emitter {
 
     this.applyFormat();
     this.track = null;
+    this.paused = false;
     this._makeTrack();
 
     this.metrics = { renderMs: 0, fps: 0, target: this.fmt.fps, late: 0, warn: null };
@@ -99,6 +100,7 @@ export class Compositor extends Emitter {
 
   // ---------------------------------------------------------------------
   frame() {
+    if (this.paused) return; // mixer mode: the Studio Mixer renders, the monitors show its multiview
     const t0 = performance.now();
     const plan = this.switcher.plan(t0);
     const W = this.pgm.width, H = this.pgm.height, ctx = this.pctx;

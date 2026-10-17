@@ -53,9 +53,10 @@ export function mountMonitors(app, root) {
     pgmMeta.textContent = `${f.width}×${f.height} ${f.fps}p`;
     pvwMeta.textContent = switcher.preview?.kind === 'scene' ? 'Scene' : switcher.preview ? 'Source' : '';
     for (const b of transBtns) b.classList.toggle('on', b.dataset.t === store.ws.transition.type);
-    autoBtn.classList.toggle('running', switcher.inTransition && !switcher.trans?.manual);
+    autoBtn.classList.toggle('running', switcher.inTransition && !(switcher.trans?.remoteManual ?? switcher.trans?.manual));
     ftb.classList.toggle('active', switcher.ftb.black);
     if (!switcher.trans) tbar.value = 0;
+    else if (switcher.remote && switcher.trans.remoteManual && document.activeElement !== tbar) tbar.value = Math.round(switcher.trans.pos * 1000);
     drawEditor();
   }
   switcher.on('change', sync);
