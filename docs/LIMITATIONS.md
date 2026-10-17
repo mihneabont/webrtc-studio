@@ -36,22 +36,7 @@ network where a direct path exists, but:
   interruption, which ICE recovers by itself), reconnecting needs a new invite;
 - the studio cannot reconnect contributors automatically after it reloads.
 
-**Default: public meeting points (no server of our own).** Contributor invite
-links use public MQTT brokers (HiveMQ, EMQX and Mosquitto, all at once) as a
-mailbox for the handshake (`js/meet.js`). The link carries a room, a slot and a
-random 256-bit key; every message is encrypted with AES-GCM under that key and
-sent on a topic derived from room and key, so the brokers can neither read nor
-forge them. Media never goes there. With it, the link is reusable: when the
-studio reloads it asks contributors whose page is still open to reconnect, and
-they are back within a few seconds (tested: about 4 s). A contributor who
-reloads their own page presses *Join studio* again (the browser needs a click
-before it opens the camera). Limits: it depends on public brokers that nobody
-here runs; using three independent ones means any one of them is enough. If
-none can be reached, the source card offers a copy-paste invite instead, and
-Settings can switch the meeting points off entirely. Receiver output links
-still use copy-paste or the relay below.
-
-**Smallest compromise with your own server:** the optional relay in `signaling-server/server.mjs`
+**Smallest compromise:** the optional relay in `signaling-server/server.mjs`
 (about 200 lines of Node with no dependencies). It forwards only small JSON
 messages over Server-Sent Events. With it, contributor and receiver links are
 reusable and both sides reconnect automatically, including after a studio

@@ -83,7 +83,6 @@ function mountSourcesTab(app, root) {
     const s = sources.add({ name: nameIn.value.trim(), kind });
     nameIn.value = '';
     if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') invite(s);
-    if (s.cfg.kind === 'peer' && s.cfg.mode === 'relay') sources.awaitContributor(s.id);
     if (s.cfg.kind === 'obs' && store.ws.settings.signalingUrl) sources.reconnect(s.id);
     if (s.cfg.kind === 'srt' && store.ws.settings.signalingUrl) sources.startSrt(s.id);
   };
@@ -110,11 +109,11 @@ function mountSourcesTab(app, root) {
       b.classList.toggle('on', b.dataset.kind === kind);
       b.setAttribute('aria-checked', String(b.dataset.kind === kind));
     }
-    const relay = !!app.meet || relayWorksRemotely(store.ws.settings.signalingUrl);
+    const relay = relayWorksRemotely(store.ws.settings.signalingUrl);
     const helper = app.helperInfo ? '' : ' The helper is not running on this computer yet: the new source shows how to install it.';
     const text = {
       peer: relay
-        ? 'Send someone a link: they open it in a phone or computer browser and allow camera and microphone. The link is reusable: if this page reloads, they reconnect by themselves within a few seconds. No server or install needed; video goes directly from their browser to this one.'
+        ? 'Send someone a link: they open it in a phone or computer browser and allow camera and microphone. The link is reusable and reconnects by itself through the signaling relay set in Settings. Video goes directly from their browser to this one.'
         : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
       obs: `For encoders that publish with WHIP: OBS, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
       whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
@@ -173,12 +172,7 @@ function mountSourcesTab(app, root) {
     } else if (s.cfg.kind === 'obs') {
       actions.push(...obsActions(s, live));
     } else if (s.cfg.kind === 'peer') {
-      const meetDown = app.meet && app.meet.state !== 'open' && app.meet.state !== 'connecting';
-      if (meetDown) {
-        actions.push(el('div', { class: 'note warn' }, 'Can\'t reach the public meeting points right now, so the contributor can\'t connect with this link. ',
-          el('button', { class: 'btn sm', onclick: () => { sources.update(s.id, { mode: 'manual' }); invite(s); } }, 'Use a copy-paste invite instead')));
-      }
-      actions.push(el('div', { class: 'small muted' }, 'Contributor link (reusable; reconnects automatically, even after this page reloads):'), linkBox(sources.relayLink(s.id), 'Copy link'),
+      actions.push(el('div', { class: 'small muted' }, 'Contributor link (reusable; reconnects automatically):'), linkBox(sources.relayLink(s.id), 'Copy link'),
         el('div', { class: 'btn-row' },
           el('button', { class: 'btn primary', onclick: () => sources.reconnect(s.id) }, 'Reconnect'),
           live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
@@ -191,11 +185,8 @@ function mountSourcesTab(app, root) {
         live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
     }
 
-    const modeOpts = (app.meet || relayWorksRemotely(store.ws.settings.signalingUrl)) && s.cfg.kind === 'peer'
-      ? field('Invite', select({ relay: 'Reconnecting link', manual: 'Copy-paste codes (one-time)' }, s.cfg.mode, (v) => {
-        sources.disconnect(s.id); sources.update(s.id, { mode: v });
-        if (v === 'relay') sources.awaitContributor(s.id); else invite(s);
-      }))
+    const modeOpts = relayWorksRemotely(store.ws.settings.signalingUrl) && s.cfg.kind === 'peer'
+      ? field('Signaling', select({ manual: 'Copy-paste codes', relay: 'Signaling relay' }, s.cfg.mode, (v) => { sources.disconnect(s.id); sources.update(s.id, { mode: v }); }))
       : null;
     const settings = el('details', {}, el('summary', {}, 'Source settings'),
       el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
@@ -399,12 +390,10 @@ function mountSettingsTab(app, root) {
       check('Force relay (send everything through TURN)', ice.forceRelay, (v) => { ice.forceRelay = v; save(); }),
       el('div', { class: 'small muted' }, 'ICE settings apply to new connections. TURN credentials are stored in this browser.')),
     el('div', { class: 'card' },
-      check('Reconnecting invite links (public meeting points)', st.publicMeet !== false, (v) => { st.publicMeet = v; save(); app.setupMeet(); app.setupRelay(); app.ui.emit('settings'); }),
-      el('div', { class: 'small muted' }, 'Contributor links find this studio again by themselves after a page reload or network blip. The studio and the contributor exchange only their short, encrypted handshake through public MQTT brokers (HiveMQ, EMQX, Mosquitto); video still goes directly between the browsers. Turn off to use one-time copy-paste invites only.'),
       field('Signaling relay URL', sigUrl, 'Optional. Enables reusable contributor/receiver links and automatic reconnection. Carries only SDP text, never media. See signaling-server/ in the project.'),
       field('Room', el('div', { class: 'linkbox' }, room, el('button', { class: 'btn sm', onclick: () => {
         if (!confirm('Generate a new room? Existing relay links stop working.')) return;
-        st.room = uid(8); room.value = st.room; save(); app.setupMeet(); app.setupRelay(); app.ui.emit('settings');
+        st.room = uid(8); room.value = st.room; save(); app.setupRelay(); app.ui.emit('settings');
       } }, 'New room'))),
       field('WHIP/WHEP CORS forwarder', text(st.whipProxy, (v) => { st.whipProxy = v.trim().replace(/\/+$/, ''); save(); }, { type: 'url', placeholder: 'Optional, e.g. https://signal.example.com' }),
         'Only needed if an ingest endpoint does not allow browser requests (CORS). Forwards the SDP request; media still goes directly from this browser to the endpoint.')),

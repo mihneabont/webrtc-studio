@@ -5,15 +5,10 @@ import { $, el, copyText, fmtKbps, fmtRes, fmtMs, sleep } from './util.js';
 import { decodeSignal, encodeSignal } from './codec.js';
 import { rtcConfig, waitForIceGathering, StatsSampler } from './rtc.js';
 import { Relay } from './relay.js';
-import { PublicRelay } from './meet.js';
 
 const params = new URLSearchParams(location.hash.slice(1));
 const offerCode = params.get('c');
-// A reusable link: through a signaling relay (sig=...) or the public meeting points (m=1, key=...).
-const relayCfg = params.get('sig') || params.get('m')
-  ? { sig: params.get('sig'), meet: params.get('m') === '1', key: params.get('key'), room: params.get('room'), slot: params.get('slot'), name: params.get('name') }
-  : null;
-let studioBoot = null; // which studio page load our connection belongs to
+const relayCfg = params.get('sig') ? { sig: params.get('sig'), room: params.get('room'), slot: params.get('slot'), name: params.get('name') } : null;
 
 let local = null;     // MediaStream being sent
 let pc = null, sampler = null, relay = null, joined = false, wakeLock = null, ctl = null;
@@ -208,7 +203,7 @@ async function applyDevices() {
 function sayHello() {
   if (!relay || !joined) return;
   setState('connecting', 'Contacting the studio…', 'Waiting for the studio to answer. It reconnects automatically.');
-  relay.send('studio', { type: 'hello' }).catch((e) => setState('failed', relayCfg?.meet ? 'Can\'t reach the studio yet' : 'Signaling relay unreachable', relayCfg?.meet ? `${e.message} Retrying by itself.` : e.message));
+  relay.send('studio', { type: 'hello' }).catch((e) => setState('failed', 'Signaling relay unreachable', e.message));
 }
 
 function sendBye() {
@@ -274,24 +269,18 @@ window.addEventListener('pagehide', () => { if (joined) sendBye(); });
     }
   } else if (relayCfg) {
     ui.who.textContent = relayCfg.name ? `as “${relayCfg.name}”` : '';
-    relay = relayCfg.meet
-      ? new PublicRelay({ room: relayCfg.room, key: relayCfg.key, peer: `src-${relayCfg.slot}` })
-      : new Relay(relayCfg.sig, relayCfg.room, `src-${relayCfg.slot}`);
+    relay = new Relay(relayCfg.sig, relayCfg.room, `src-${relayCfg.slot}`);
     relay.on('state', (st) => { if (st === 'open' && joined && (!pc || pc.connectionState !== 'connected')) sayHello(); });
     relay.on('message', async (m) => {
       if (m.from !== 'studio') return;
       if (m.type === 'offer' && joined) {
         try {
-          studioBoot = m.boot || null;
           const sdp = await answerOffer(m);
           await relay.send('studio', { type: 'answer', sdp, gen: m.gen });
           setState('connecting', 'Connecting to the studio…');
         } catch (e) { setState('failed', 'Negotiation failed', e.message); }
       } else if (m.type === 'rehello') {
-        // The studio reloaded (new boot) or asked explicitly: our old connection is gone even if
-        // the browser hasn't noticed yet, so redo the handshake now instead of waiting for it to time out.
-        const studioRestarted = m.force || (m.boot && m.boot !== studioBoot);
-        if (joined && (studioRestarted || !pc || pc.connectionState !== 'connected')) { await sleep(300); sayHello(); }
+        if (joined && (!pc || pc.connectionState !== 'connected')) { await sleep(300); sayHello(); }
       } else if (m.type === 'bye') {
         closePc();
         setState('ended', 'The studio disconnected you', 'Press Join studio to offer your feed again.');
@@ -302,9 +291,7 @@ window.addEventListener('pagehide', () => { if (joined) sendBye(); });
     });
     relay.connect();
     setState('idle', 'Ready', 'Choose your camera and microphone, then press Join studio.');
-    ui.help.textContent = relayCfg.meet
-      ? 'This link is reusable: keep this page open and it reconnects by itself, even if the studio reloads. Video goes directly from your browser to the studio; only a short encrypted handshake passes through public meeting points.'
-      : 'This link is reusable and reconnects automatically. Media goes directly from your browser to the studio; the signaling relay only passes connection details.';
+    ui.help.textContent = 'This link is reusable and reconnects automatically. Media goes directly from your browser to the studio; the signaling relay only passes connection details.';
   } else {
     setState('failed', 'No invite', 'Open the invite link the studio operator sent you.');
     ui.go.disabled = true;

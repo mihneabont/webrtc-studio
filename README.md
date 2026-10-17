@@ -57,13 +57,10 @@ browser.
 
 ## Operator workflow
 
-1. **Add a source** (Sources tab). An *Invite link* source gives you a reusable
-   link. Send it to the contributor; they press *Join studio* and appear in the
-   studio. If the studio page reloads, they reconnect by themselves within a few
-   seconds. The two pages find each other through public meeting points (see
-   docs/LIMITATIONS.md); media flows directly between the two browsers. With
-   that switched off (Settings), the link works once and the contributor sends
-   back a reply code to paste into the source card. WHEP sources take a URL instead.
+1. **Add a source** (Sources tab). With no server configured, the studio creates
+   an invite link. Send it to the contributor; they press *Join studio* and send
+   back a reply code; paste it into the source card. Media then flows directly
+   between the two browsers. WHEP sources take a URL instead.
    **OBS or another WHIP encoder** can be a source too: choose *OBS / WHIP
    encoder*, and the card shows a Server URL and Bearer Token to paste into OBS
    (Settings → Stream → Service: WHIP). This needs the optional helper running

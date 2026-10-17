@@ -8,7 +8,6 @@ import { Switcher } from './switcher.js';
 import { Compositor } from './compositor.js';
 import { OutputManager } from './outputs.js';
 import { Relay } from './relay.js';
-import { PublicRelay, newMeetKey } from './meet.js';
 import { Emitter, el, $, relayWorksRemotely } from './util.js';
 import { HELPER_SCHEME, HELPER_VERSION } from './ui/helper-install.js';
 import { mountMonitors } from './ui/monitors.js';
@@ -38,37 +37,17 @@ switcher.on('change', updateTally);
 updateTally();
 switcher._syncAudio(0);
 
-// --- reconnecting invite links (public meeting points) ---------------------
-// Contributors find this studio again after a reload through public MQTT
-// brokers (meet.js). Only the encrypted handshake goes there, never media.
-app.setupMeet = () => {
-  app.meet?.close();
-  app.meet = null;
-  const st = store.ws.settings;
-  if (!st.meetKey) { st.meetKey = newMeetKey(); store.save(); }
-  if (st.publicMeet !== false) {
-    app.meet = new PublicRelay({ room: st.room, key: st.meetKey, peer: 'studio' });
-    app.meet.on('state', () => app.ui.emit('relay'));
-  }
-  sources.attachMeet(app.meet);
-  app.meet?.connect();
-  app.ui.emit('relay');
-};
-app.setupMeet();
-
 // --- optional signaling relay ----------------------------------------------
 app.setupRelay = () => {
   app.relay?.close();
   app.relay = null;
   const st = store.ws.settings;
   // Contributor and receiver links go to other devices. A local helper can't
-  // carry them (it serves OBS and RTMP only), so those use copy-paste codes,
-  // except contributor links when the public meeting points are on.
+  // carry them (it serves OBS and RTMP only), so those use copy-paste codes.
   if (!relayWorksRemotely(st.signalingUrl)) {
     let changed = false;
     for (const c of [...store.ws.sources, ...store.ws.outputs]) {
-      const isSource = store.ws.sources.includes(c);
-      if ((c.kind || 'peer') === 'peer' && c.mode === 'relay' && !(isSource && app.meet)) { c.mode = 'manual'; changed = true; }
+      if ((c.kind || 'peer') === 'peer' && c.mode === 'relay') { c.mode = 'manual'; changed = true; }
     }
     if (changed) store.save();
   }
