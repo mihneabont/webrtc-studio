@@ -15,3 +15,11 @@ body.remote { min-height: 100%; }
 @media (max-width: 900px) {
   .remote-main { grid-template-columns: 1fr; padding: 8px; }
 }
+/* Camera and microphone on/off: a break without leaving the studio. */
+.media-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.media-toggle svg { flex: none; }
+.media-toggle.off { background: #3d1214; border-color: #7f2328; color: #ffb0b3; }
+.cam-off { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; background: #000; }
+.cam-off.hidden { display: none; }
+.media-row .media-toggle { flex: 1; justify-content: center; padding-top: 8px; padding-bottom: 8px; }
+.media-row:not(:has(.media-toggle:not(.hidden))) { display: none; }

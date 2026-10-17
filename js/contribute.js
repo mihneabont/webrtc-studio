@@ -12,11 +12,12 @@ const relayCfg = params.get('sig') ? { sig: params.get('sig'), room: params.get(
 
 let local = null;     // MediaStream being sent
 let pc = null, sampler = null, relay = null, joined = false, wakeLock = null, ctl = null;
+let camOn = true, micOn = true; // paused by the contributor: the connection stays up
 let offerMsg = null;
 
 const ui = {
   dot: $('#dot'), state: $('#state'), detail: $('#detail'), self: $('#self'), frame: $('#frame'), tally: $('#tally'),
-  vsel: $('#vsel'), asel: $('#asel'), qsel: $('#qsel'), bitrate: $('#bitrate'), go: $('#go'), stop: $('#stop'),
+  vsel: $('#vsel'), asel: $('#asel'), qsel: $('#qsel'), bitrate: $('#bitrate'), go: $('#go'), cam: $('#cam'), mic: $('#mic'), camOff: $('#camOff'),
   replyCard: $('#replyCard'), reply: $('#reply'), copy: $('#copy'), copied: $('#copied'), stats: $('#stats'), who: $('#who'), help: $('#help'),
 };
 
@@ -114,6 +115,7 @@ async function answerOffer(msg) {
       const vt = local?.getVideoTracks()[0];
       const s = vt?.getSettings() || {};
       dc.send(JSON.stringify({ type: 'info', device: vt?.label || local?.getAudioTracks()[0]?.label || '', width: s.width, height: s.height, fps: s.frameRate }));
+      sendMediaState();
     };
   };
   pc.onconnectionstatechange = () => {
@@ -163,7 +165,8 @@ async function join() {
     setState('connecting', 'Starting camera…');
     await startPreview();
     joined = true;
-    ui.stop.classList.remove('hidden');
+    camOn = micOn = true;
+    renderToggles();
     ui.go.textContent = 'Apply device change';
     if (offerCode) {
       setState('connecting', 'Preparing reply code…', 'Gathering network addresses.');
@@ -191,9 +194,12 @@ async function applyDevices() {
     const hadKinds = new Set(local.getTracks().map((t) => t.kind));
     await startPreview();
     const nowKinds = new Set(local.getTracks().map((t) => t.kind));
+    camOn = micOn = true; // a device change turns both back on
+    renderToggles();
+    sendMediaState();
     await tuneSenders();
     if ([...nowKinds].some((k) => !hadKinds.has(k))) {
-      setState('warn', 'Rejoin needed', 'You added audio or video that was not part of the connection. Leave and use a new invite (or wait for automatic reconnection) to include it.');
+      setState('warn', 'Rejoin needed', 'You added audio or video that was not part of the connection. Ask the studio operator to reconnect you (a new invite) to include it.');
     }
   } catch (e) {
     setState('failed', 'Device change failed', e.message);
@@ -219,11 +225,91 @@ function leave(notify = true) {
   local = null;
   ui.self.srcObject = null;
   ui.go.textContent = 'Join studio';
-  ui.stop.classList.add('hidden');
+  camOn = micOn = true;
+  renderToggles();
   ui.replyCard.classList.add('hidden');
   ui.frame.classList.remove('pgm', 'pvw');
   wakeLock?.release().catch(() => {});
   if (notify) setState('ended', 'You left the studio', offerCode ? 'To rejoin, ask the operator for a new invite link.' : 'Press Join to come back.');
+}
+
+// --- camera and microphone on/off ------------------------------------------
+// A break without leaving: the connection, and so the link, stays up.
+// Camera off stops the camera itself (its light goes off) and sends nothing;
+// camera on opens it again into the same connection. Mic off sends silence.
+const ICONS = {
+  cam: ['M3 8a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M16 10l5-3v10l-5-3'],
+  camOff: ['M16 16v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L21 7v10', 'M2 2l20 20'],
+  mic: ['M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z', 'M19 10v2a7 7 0 0 1-14 0v-2', 'M12 19v3', 'M8 22h8'],
+  micOff: ['M2 2l20 20', 'M18.89 13.23A7 7 0 0 0 19 12v-2', 'M5 10v2a7 7 0 0 0 12 5', 'M15 9.34V5a3 3 0 0 0-5.68-1.33', 'M9 9v3a3 3 0 0 0 5.12 2.12', 'M12 19v3', 'M8 22h8'],
+};
+function icon(paths) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', width: 20, height: 20, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) svg.setAttribute(k, v);
+  for (const d of paths) { const p = document.createElementNS(ns, 'path'); p.setAttribute('d', d); svg.append(p); }
+  return svg;
+}
+
+function videoSender() {
+  return pc?.getTransceivers().find((t) => t.receiver.track?.kind === 'video')?.sender || null;
+}
+
+function renderToggles() {
+  const hasVideo = !!local?.getVideoTracks().length || (!camOn && ui.vsel.value !== 'none');
+  const hasAudio = !!local?.getAudioTracks().length;
+  ui.cam.classList.toggle('hidden', !joined || !hasVideo);
+  ui.mic.classList.toggle('hidden', !joined || !hasAudio);
+  ui.cam.replaceChildren(icon(camOn ? ICONS.cam : ICONS.camOff), camOn ? 'Camera on' : 'Camera off');
+  ui.mic.replaceChildren(icon(micOn ? ICONS.mic : ICONS.micOff), micOn ? 'Mic on' : 'Mic off');
+  ui.cam.classList.toggle('off', !camOn);
+  ui.mic.classList.toggle('off', !micOn);
+  ui.cam.setAttribute('aria-pressed', String(camOn));
+  ui.mic.setAttribute('aria-pressed', String(micOn));
+  ui.cam.title = camOn ? 'Turn camera off (you stay connected)' : 'Turn camera on';
+  ui.mic.title = micOn ? 'Turn microphone off (you stay connected)' : 'Turn microphone on';
+  ui.camOff.classList.toggle('hidden', camOn || !joined);
+}
+
+function sendMediaState() {
+  try { if (ctl?.readyState === 'open') ctl.send(JSON.stringify({ type: 'media', video: camOn, audio: micOn })); } catch { /* ignore */ }
+}
+
+async function toggleCam() {
+  ui.cam.disabled = true;
+  try {
+    if (camOn) {
+      for (const t of local.getVideoTracks()) { t.stop(); local.removeTrack(t); }
+      await videoSender()?.replaceTrack(null);
+      camOn = false;
+    } else {
+      const v = ui.vsel.value;
+      const { w, h, fps } = quality();
+      const s = v === 'screen'
+        ? await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } }, audio: false })
+        : await navigator.mediaDevices.getUserMedia({ video: { deviceId: v === 'default' ? undefined : { exact: v }, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } } });
+      const t = s.getVideoTracks()[0];
+      t.contentHint = v === 'screen' ? 'detail' : 'motion';
+      local.addTrack(t);
+      await videoSender()?.replaceTrack(t);
+      await tuneSenders();
+      ui.self.srcObject = local;
+      camOn = true;
+    }
+    sendMediaState();
+  } catch (e) {
+    setState('warn', 'Camera could not start', e.name === 'NotAllowedError' ? 'Camera permission was denied. Allow it in the browser and try again.' : e.message);
+  } finally {
+    ui.cam.disabled = false;
+    renderToggles();
+  }
+}
+
+function toggleMic() {
+  micOn = !micOn;
+  for (const t of local?.getAudioTracks() || []) t.enabled = micOn;
+  sendMediaState();
+  renderToggles();
 }
 
 async function keepAwake() {
@@ -244,7 +330,8 @@ setInterval(async () => {
 }, 1000);
 
 ui.go.addEventListener('click', () => (joined ? applyDevices() : join()));
-ui.stop.addEventListener('click', () => leave(true));
+ui.cam.addEventListener('click', toggleCam);
+ui.mic.addEventListener('click', toggleMic);
 ui.copy.addEventListener('click', async () => { ui.copied.textContent = (await copyText(ui.reply.value)) ? 'Copied' : 'Select the text and copy it manually'; });
 ui.frame.addEventListener('dblclick', () => (document.fullscreenElement ? document.exitFullscreen() : ui.frame.requestFullscreen?.()));
 navigator.mediaDevices?.addEventListener?.('devicechange', listDevices);

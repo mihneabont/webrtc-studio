@@ -141,7 +141,9 @@ function mountSourcesTab(app, root) {
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
       s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · WHIP via helper' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · invite link, relay' : ' · invite link, copy-paste',
-      s.info?.device ? ` · ${s.info.device}` : '');
+      s.info?.device ? ` · ${s.info.device}` : '',
+      s.pc && s.paused?.video ? el('span', { class: 'paused-chip' }, 'camera off') : null,
+      s.pc && s.paused?.audio ? el('span', { class: 'paused-chip' }, 'mic off') : null);
     const detail = el('div', { class: `card-detail ${s.state === 'failed' ? 'bad' : ''}` }, s.detail || '');
     const err = errors.get(s.id) ? el('div', { class: 'card-detail bad' }, errors.get(s.id)) : null;
     const stats = el('div', { class: 'stats-slot' }, statsFor(s));

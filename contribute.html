@@ -12,6 +12,7 @@
   <main class="remote-main">
     <div class="remote-video" id="frame">
       <video id="self" muted playsinline autoplay></video>
+      <div class="cam-off hidden" id="camOff">Camera off</div>
       <div class="tally-badge" id="tally"></div>
       <div class="remote-stats mono" id="stats"></div>
     </div>
@@ -36,9 +37,12 @@
           <label class="field">Max bitrate (kb/s)
             <input id="bitrate" type="number" value="4000" min="300" step="100"></label>
         </div>
+        <div class="btn-row media-row">
+          <button class="btn media-toggle hidden" id="cam" type="button" aria-pressed="true" title="Turn camera off"></button>
+          <button class="btn media-toggle hidden" id="mic" type="button" aria-pressed="true" title="Turn microphone off"></button>
+        </div>
         <div class="btn-row">
           <button class="btn live" id="go">Join studio</button>
-          <button class="btn danger hidden" id="stop">Leave</button>
         </div>
       </div>
       <div class="card hidden" id="replyCard">

@@ -204,6 +204,7 @@ export class SourceManager extends Emitter {
       if (s.gen !== gen) return;
       let m; try { m = JSON.parse(e.data); } catch { return; }
       if (m.type === 'info') { s.info = m; this.emit('change', s); }
+      if (m.type === 'media') { s.paused = { video: m.video === false, audio: m.audio === false }; this.emit('change', s); } // camera or mic turned off by the contributor
       if (m.type === 'bye') {
         this._teardown(s, 'bye');
         this._set(s, 'ended', 'The contributor ended the stream.');
