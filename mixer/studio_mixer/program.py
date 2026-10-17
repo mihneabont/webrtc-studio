@@ -88,6 +88,9 @@ class Program:
         self.started_at = time.time()
         self.fps_count = 0
         self.fps = 0.0
+        # Encoded frames per encoder this second, and for how many seconds frames went in but none came out.
+        self.enc_count = {"pgmenc": 0, "mvenc": 0}
+        self.enc_stalled = 0
 
     # =============================================================== build
 
@@ -101,13 +104,13 @@ class Program:
             f"compositor name=pgm background=black force-live=true latency={Gst.SECOND // f.fps} ! "
             f"video/x-raw,width={f.width},height={f.height},framerate={f.fps}/1 ! videoconvert ! "
             "video/x-raw,format=I420 ! identity name=pgmrate ! tee name=pt allow-not-linked=true "
-            f"pt. ! {leaky} ! {enc} ! h264parse config-interval=-1 ! queue ! pmux. "
+            f"pt. ! {leaky} ! {enc} ! h264parse name=pgmenc config-interval=-1 ! queue ! pmux. "
             f"pt. ! {leaky} ! videoscale ! video/x-raw,width={MV_BIG[0]},height={MV_BIG[1]} ! mv.sink_0 "
             f"compositor name=pvw background=black force-live=true ! "
             f"video/x-raw,width={MV_BIG[0]},height={MV_BIG[1]},framerate={MV_FPS}/1 ! {leaky} ! mv.sink_1 "
             f"compositor name=mv background=black force-live=true ! "
             f"video/x-raw,width={MV_WIDTH},height={MV_HEIGHT},framerate={MV_FPS}/1 ! {leaky} ! {mv_enc} ! "
-            "h264parse config-interval=-1 ! queue ! mvmux. "
+            "h264parse name=mvenc config-interval=-1 ! queue ! mvmux. "
             # Fade to black sits on top of everything on Programme.
             f"videotestsrc is-live=true pattern=black ! video/x-raw,format=AYUV,width=16,height=16,framerate={f.fps}/1 ! pgm.sink_0 "
             f"videotestsrc is-live=true pattern=black ! video/x-raw,format=AYUV,width=16,height=16,framerate={MV_FPS}/1 ! pvw.sink_0 "
@@ -135,6 +138,8 @@ class Program:
         base.set_property("height", MV_BIG[1])
         self.mv.get_static_pad("sink_0").set_property("xpos", MV_BIG[0])
         self.pipeline.get_by_name("pgmrate").get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._count_frame)
+        for name in ("pgmenc", "mvenc"):
+            self.pipeline.get_by_name(name).get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._count_encoded, name)
 
         for sink_name, path in (("pgm_out", "program"), ("mv_out", "multiview")):
             pub = SrtPublisher(path, self.srt_uri, self.streamid(path))
@@ -701,8 +706,15 @@ class Program:
         self.fps_count += 1
         return Gst.PadProbeReturn.OK
 
+    def _count_encoded(self, _pad, _info, name):
+        self.enc_count[name] += 1
+        return Gst.PadProbeReturn.OK
+
     def _fps_tick(self) -> bool:
         self.fps, self.fps_count = float(self.fps_count), 0
+        stalled = self.fps > 0 and min(self.enc_count.values()) == 0
+        self.enc_stalled = self.enc_stalled + 1 if stalled else 0
+        self.enc_count = dict.fromkeys(self.enc_count, 0)
         return True
 
     def _on_message(self, _bus, msg: Gst.Message) -> None:
