@@ -201,7 +201,7 @@ export class MixerLink extends Emitter {
     app.switcher.remote = this;
     app.outputs.remote = this;
     app.sources.remote = this;
-    for (const s of app.sources.all()) if (MIXER_KINDS.has(s.cfg.kind)) { app.sources._teardown(s, 'mixer'); if (s.cfg.kind === 'srt') app.sources.stopSrt(s); }
+    for (const s of app.sources.all()) if (MIXER_KINDS.has(s.cfg.kind)) app.sources._teardown(s, 'mixer');
     app.compositor.paused = true;
     this._origLevels = this._origLevels || app.audio.levels.bind(app.audio);
     app.audio.levels = () => this._levels();

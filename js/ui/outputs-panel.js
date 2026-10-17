@@ -1,7 +1,6 @@
 // Outputs tab: programme format, receivers, WHIP and Twitch outputs.
 import { el, fmtKbps, fmtRes, fmtMs, relayWorksRemotely } from '../util.js';
-import { OUTPUT_STATES, TWITCH, defaultKbps, rtmpFormat } from '../outputs.js';
-import { downloadHelperInstaller } from './helper-install.js';
+import { OUTPUT_STATES, TWITCH, defaultKbps } from '../outputs.js';
 import { sealSecret, openSecret } from '../store.js';
 import { field, text, num, select, check, linkBox, statLine, CardList } from './forms.js';
 
@@ -24,7 +23,6 @@ export function mountOutputsTab(app, root, setBadge) {
     store.save();
     compositor.applyFormat();
     outputs.applyEncodingAll();
-    if ('height' in patch) app.sources.restartSrtForFormat();
     renderFormat();
     cards.render(outputs.all());
   };
@@ -63,10 +61,10 @@ export function mountOutputsTab(app, root, setBadge) {
 
   const cards = new CardList(list, (o) => {
     const remote = outputs.remoteKind(o);
-    const live = remote ? ['connecting', 'live', 'unstable'].includes(o.state) : !!(o.pc || o.rtmp);
+    const live = remote ? ['connecting', 'live', 'unstable'].includes(o.state) : !!o.pc;
     const kindLabel = remote ? `${{ twitch: 'Twitch', whip: 'WHIP', rtmp: 'RTMP', srt: 'SRT' }[o.cfg.kind]} from the mixer`
       : o.cfg.kind === 'srt' ? 'SRT (needs the mixer)'
-        : o.cfg.kind === 'twitch' ? 'Twitch (WHIP)' : o.cfg.kind === 'whip' ? 'WHIP' : o.cfg.kind === 'rtmp' ? 'RTMP via helper' : `Browser receiver · ${o.cfg.mode === 'relay' ? 'relay' : 'copy-paste'}`;
+        : o.cfg.kind === 'twitch' ? 'Twitch (WHIP)' : o.cfg.kind === 'whip' ? 'WHIP' : o.cfg.kind === 'rtmp' ? 'RTMP (needs the mixer)' : `Browser receiver · ${o.cfg.mode === 'relay' ? 'relay' : 'copy-paste'}`;
     const head = el('div', { class: 'card-head' }, el('span', { class: `dot ${o.state}` }), el('span', { class: 'card-title' }, o.cfg.name),
       o.state === 'live' ? el('span', { class: 'tchip pgm' }, 'ON AIR') : null);
     const state = el('div', { class: 'card-state' }, `${OUTPUT_STATES[o.state] || o.state} · ${kindLabel}`);
@@ -111,7 +109,7 @@ export function mountOutputsTab(app, root, setBadge) {
     }
 
     if (o.cfg.kind === 'srt') {
-      if (!remote) parts.push(el('div', { class: 'note warn' }, 'SRT outputs are sent by the Studio Mixer. Connect one in Settings, Studio Mixer.'));
+      if (!remote) parts.push(needsMixer('A web page can\'t send SRT. The Studio Mixer sends it for you.'));
       const url = text(o.cfg.url, (v) => outputs.update(o.id, { url: v.trim() }, { silent: true }), { placeholder: 'srt://host:port?streamid=…' });
       parts.push(field('SRT address', url, 'The full srt:// address from the receiving server, including streamid or passphrase if it needs them. The mixer connects as the caller.'));
       if (remote) {
@@ -125,18 +123,20 @@ export function mountOutputsTab(app, root, setBadge) {
     }
 
     if (o.cfg.kind === 'rtmp') {
-      if (!remote) parts.push(...rtmpHelperNotes());
+      if (!remote) parts.push(needsMixer('A web page can\'t send RTMP (YouTube, Twitch, Facebook and most platforms). The Studio Mixer sends it for you.'));
       const url = text(o.cfg.url, (v) => outputs.update(o.id, { url: v.trim() }, { silent: true }), { placeholder: 'rtmp://live.twitch.tv/app' });
       const keyIn = el('input', { type: 'password', value: o.token || '', placeholder: 'Stream key', autocomplete: 'off' });
       keyIn.addEventListener('change', () => { o.token = keyIn.value.trim(); });
       parts.push(field('Server URL', url, 'From the platform\'s stream settings, e.g. rtmp://a.rtmp.youtube.com/live2 or rtmp://live.twitch.tv/app. rtmps:// works too.'),
         field('Stream key', keyIn), secretControls(o, keyIn));
-      parts.push(el('div', { class: 'btn-row' },
-        el('button', { class: `btn ${live ? '' : 'live'}`, onclick: () => { o.token = keyIn.value.trim(); outputs.start(o.id); } }, live ? 'Restart' : 'Start broadcast'),
-        live || o.state === 'failed' ? el('button', { class: 'btn danger', onclick: () => outputs.stop(o.id) }, 'Stop broadcast') : null));
+      if (remote) {
+        parts.push(el('div', { class: 'btn-row' },
+          el('button', { class: `btn ${live ? '' : 'live'}`, onclick: () => { o.token = keyIn.value.trim(); outputs.start(o.id); } }, live ? 'Restart' : 'Start broadcast'),
+          live || o.state === 'failed' ? el('button', { class: 'btn danger', onclick: () => outputs.stop(o.id) }, 'Stop broadcast') : null));
+      }
       parts.push(el('details', {}, el('summary', {}, 'Output settings'), el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
         field('Name', text(o.cfg.name, (v) => outputs.update(o.id, { name: v }))), bitrate,
-        el('div', { class: 'small muted' }, remote ? 'Video: the mixer\'s H.264 programme, passed through. Audio: AAC 160 kb/s.' : 'Video: H.264, keyframe every 2 s. Audio: AAC 160 kb/s. Expect 1 to 3 s more delay than the WebRTC outputs.'),
+        el('div', { class: 'small muted' }, 'Video: the mixer\'s H.264 programme, passed through. Audio: AAC 160 kb/s.'),
         check('Reconnect automatically after failures', o.cfg.autoReconnect, (v) => outputs.update(o.id, { autoReconnect: v })),
         removeBtn(o))));
       return el('div', { class: `card ${o.state === 'live' ? 'live' : o.state === 'failed' ? 'failed' : ''}` }, ...parts);
@@ -172,29 +172,9 @@ export function mountOutputsTab(app, root, setBadge) {
     return el('div', { class: `card ${o.state === 'live' ? 'live' : o.state === 'failed' ? 'failed' : ''}` }, ...parts);
   });
 
-  // What the RTMP card needs from the helper on this computer.
-  function rtmpHelperNotes() {
-    const info = app.helperInfo;
-    const fmtOk = rtmpFormat();
-    const notes = [];
-    if (!fmtOk) notes.push(el('div', { class: 'note warn' }, 'This browser cannot record the programme for RTMP. Use a current Chrome or Edge.'));
-    else if (fmtOk.codec !== 'h264') notes.push(el('div', { class: 'note warn' }, 'This browser cannot record H.264, so the helper re-encodes the video, which uses more CPU. Chrome or Edge avoid that.'));
-    const checkBtn = el('button', { class: 'btn', onclick: async (e) => {
-      e.target.textContent = 'Looking…';
-      if (!(await app.detectHelper())) e.target.textContent = 'Not found. Check again';
-    } }, 'Check again');
-    const install = el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)');
-    if (!info) {
-      notes.push(el('div', { class: 'note warn' }, 'A web page can\'t send RTMP by itself. The helper on this computer takes the programme from this page and pushes it to the RTMP server with ffmpeg.'),
-        el('div', { class: 'btn-row' }, install, checkBtn),
-        el('div', { class: 'small muted' }, 'The setup file installs Node.js and ffmpeg if needed and runs the helper in the background. Then click Check again.'));
-    } else if (!info.features?.includes('rtmp')) {
-      notes.push(el('div', { class: 'note warn' }, info.ffmpeg === false
-        ? 'The helper is running but can\'t find ffmpeg. Run the setup file again to install it, then click Check again.'
-        : 'The helper on this computer is an older version without RTMP. Run the setup file again to update it, then click Check again.'),
-      el('div', { class: 'btn-row' }, install, checkBtn));
-    }
-    return notes;
+  function needsMixer(why) {
+    return el('div', { class: 'note warn' }, why, ' ',
+      el('button', { class: 'btn sm primary', onclick: () => app.ui.showTab('settings', 'mixer') }, 'Set up the Studio Mixer'));
   }
 
   function secretControls(o, keyIn) {
@@ -244,14 +224,6 @@ export function mountOutputsTab(app, root, setBadge) {
   function statsFor(o) {
     const st = o.stats;
     if (!st) return '';
-    if (st.rtmp) {
-      const r = st.rtmp;
-      return statLine([
-        ['fps', r.fps !== undefined ? `${Math.round(r.fps)}/${r.fpsTarget}` : null], ['sent', r.kbps ? fmtKbps(r.kbps) : null],
-        ['to helper', fmtKbps(r.upKbps)], ['behind', `${r.backlog.toFixed(1)} s`], ['speed', r.speed ? `${r.speed.toFixed(2)}×` : null],
-        ['on air', r.time || null], ['codec', `${r.codec === 'h264' ? 'H.264' : `${r.codec.toUpperCase()} → H.264`}/AAC`],
-      ]);
-    }
     const v = st.out.video, a = st.out.audio, p = st.pair;
     return statLine([
       ['res', v ? fmtRes(v.width, v.height) : null], ['fps', v?.fps !== undefined ? Math.round(v.fps) : null],
@@ -266,10 +238,9 @@ export function mountOutputsTab(app, root, setBadge) {
 
   const badge = () => setBadge(outputs.liveCount());
   function renderMode() {
-    srtAdd.hidden = !mixerOn();
     addNote.textContent = mixerOn()
       ? 'A browser receiver is any device that opens the receiver link (receive.html); it gets the programme back from the mixer. RTMP, SRT, WHIP and Twitch are sent by the Studio Mixer.'
-      : 'A browser receiver is any device that opens the receiver link (receive.html). WHIP sends to any WebRTC ingest server that implements RFC 9725. RTMP (YouTube, Twitch, Facebook and most platforms) goes through the helper on this computer.';
+      : 'A browser receiver is any device that opens the receiver link (receive.html). WHIP sends to any WebRTC ingest server that implements RFC 9725. RTMP and SRT need the Studio Mixer (Settings, Studio Mixer).';
   }
   app.mixer?.on('state', () => { renderMode(); renderFormat(); cards.render(outputs.all()); });
   renderMode();

@@ -1,7 +1,7 @@
 // Small shared helpers. No dependencies.
 
 // Can a phone or another computer use this relay for contributor/receiver
-// links? Not a helper on localhost (that's the phone itself there), and not
+// links? Not a relay on localhost (that's the phone itself there), and not
 // plain http from a secure page (browsers block it).
 export function relayWorksRemotely(url) {
   if (!url) return false;

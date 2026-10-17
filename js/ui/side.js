@@ -1,12 +1,10 @@
 // Right-hand side panel: Sources, Scenes, Graphics, Outputs, Settings.
 import { el, fmtKbps, fmtRes, fmtMs, uid, relayWorksRemotely } from '../util.js';
-import { SOURCE_STATES, stateLabel } from '../sources.js';
+import { SOURCE_STATES, MIXER_KINDS, stateLabel } from '../sources.js';
 import { codecSupported } from '../rtc.js';
 import { field, text, num, select, check, linkBox, statLine, CardList } from './forms.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
-import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
-import { mountHelperPanel } from './helper-panel.js';
 import { mountMixerPanel } from './mixer-panel.js';
 
 
@@ -51,14 +49,13 @@ function mountSourcesTab(app, root) {
   const errors = new Map();
 
   const nameIn = el('input', { type: 'text', placeholder: 'Source name, e.g. Camera 1' });
-  const KINDS = { peer: 'Contributor (browser link)', obs: 'OBS / WHIP encoder', srt: 'SRT (via helper)', whep: 'WHEP endpoint' };
-  const MIXER_KINDS = { peer: 'Contributor (browser link)', obs: 'OBS / WHIP encoder', srt: 'SRT', rtmp: 'RTMP', whep: 'WHEP endpoint' };
   const kindBox = el('span');
   let kindSel;
   const renderKinds = () => {
     const was = kindSel?.value || 'peer';
-    const opts = app.mixer?.active ? MIXER_KINDS : KINDS;
-    kindSel = select(opts, opts[was] ? was : 'peer', () => {});
+    const mix = app.mixer?.active ? '' : ' (needs the mixer)';
+    const opts = { peer: 'Contributor (browser link)', whep: 'WHEP endpoint', obs: `OBS / WHIP encoder${mix}`, srt: `SRT${mix}`, rtmp: `RTMP${mix}` };
+    kindSel = select(opts, was, () => {});
     kindBox.replaceChildren(kindSel);
   };
   renderKinds();
@@ -66,9 +63,6 @@ function mountSourcesTab(app, root) {
     const s = sources.add({ name: nameIn.value.trim(), kind: kindSel.value });
     nameIn.value = '';
     if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') invite(s);
-    if (app.mixer?.active) return;
-    if (s.cfg.kind === 'obs' && store.ws.settings.signalingUrl) sources.reconnect(s.id);
-    if (s.cfg.kind === 'srt' && store.ws.settings.signalingUrl) sources.startSrt(s.id);
   };
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
 
@@ -105,8 +99,8 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn sm', onclick: () => switcher.setPreview({ kind: 'source', id: s.id }) }, 'Preview'));
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
-      onMixer(s) ? ` · ${{ obs: 'WHIP', srt: 'SRT', rtmp: 'RTMP' }[s.cfg.kind]} to the mixer` : s.cfg.kind === 'rtmp' ? ' · RTMP (needs the mixer)' :
-      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · OBS / WHIP encoder' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · relay signaling' : ' · copy-paste signaling',
+      MIXER_KINDS.has(s.cfg.kind) ? ` · ${{ obs: 'WHIP', srt: 'SRT', rtmp: 'RTMP' }[s.cfg.kind]} to the mixer` :
+      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.mode === 'relay' ? ' · relay signaling' : ' · copy-paste signaling',
       s.info?.device ? ` · ${s.info.device}` : '');
     const detail = el('div', { class: `card-detail ${s.state === 'failed' ? 'bad' : ''}` }, s.detail || '');
     const err = errors.get(s.id) ? el('div', { class: 'card-detail bad' }, errors.get(s.id)) : null;
@@ -116,8 +110,9 @@ function mountSourcesTab(app, root) {
     const live = !!s.pc;
     if (onMixer(s)) {
       actions.push(...mixerActions(s));
-    } else if (s.cfg.kind === 'rtmp') {
-      actions.push(el('div', { class: 'note warn' }, 'RTMP senders connect to the Studio Mixer. Connect one in Settings, Studio Mixer, and this card shows the address to use.'));
+    } else if (MIXER_KINDS.has(s.cfg.kind)) {
+      actions.push(el('div', { class: 'note warn' }, `${{ obs: 'OBS and other WHIP encoders', srt: 'SRT senders', rtmp: 'RTMP senders' }[s.cfg.kind]} connect to the Studio Mixer, which a web page can't replace. Connect a mixer and this card shows the address and key to use.`),
+        el('div', { class: 'btn-row' }, el('button', { class: 'btn primary', onclick: () => app.ui.showTab('settings', 'mixer') }, 'Set up the Studio Mixer')));
     } else if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') {
       if (s.state === 'invited' && s.invite) {
         const ta = el('textarea', { rows: 3, placeholder: 'Paste the reply code from the contributor page' });
@@ -137,10 +132,6 @@ function mountSourcesTab(app, root) {
           el('button', { class: 'btn primary', onclick: () => invite(s) }, live ? 'Reconnect (new invite)' : 'Create invite'),
           live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
       }
-    } else if (s.cfg.kind === 'srt') {
-      actions.push(...srtActions(s));
-    } else if (s.cfg.kind === 'obs') {
-      actions.push(...obsActions(s, live));
     } else if (s.cfg.kind === 'peer') {
       actions.push(el('div', { class: 'small muted' }, 'Contributor link (reusable; reconnects automatically):'), linkBox(sources.relayLink(s.id), 'Copy link'),
         el('div', { class: 'btn-row' },
@@ -170,7 +161,7 @@ function mountSourcesTab(app, root) {
       head, state, detail, err, stats, ...actions, settings);
   });
 
-  function onMixer(s) { return !!app.mixer?.active && ['obs', 'srt', 'rtmp'].includes(s.cfg.kind); }
+  function onMixer(s) { return !!app.mixer?.active && MIXER_KINDS.has(s.cfg.kind); }
 
   // OBS, SRT and RTMP senders publish straight to the mixer, each source with its own key.
   function mixerActions(s) {
@@ -199,119 +190,6 @@ function mountSourcesTab(app, root) {
       app.mixer.newToken(s); cards.refresh(s);
     } }, 'New key')));
     return out;
-  }
-
-  // A helper reached as localhost gives OBS on this computer a working URL, but a
-  // phone needs this computer's network address instead.
-  function phoneUrlField(s) {
-    const url = sources.obsUrl(s.id);
-    const lan = app.helperInfo?.lan?.[0];
-    if (!url || !lan || !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(url)) return [];
-    return [field('Server for a phone (Larix) or another computer', linkBox(url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, `$1${lan}`), 'Copy'))];
-  }
-
-  // Without a reachable helper, returns what to show instead of the card's
-  // controls (why it's needed, install, check again); otherwise null.
-  function helperGuard(...why) {
-    const st = store.ws.settings;
-    if (!st.signalingUrl) {
-      const helper = app.helperOrigin;
-      return [el('div', { class: 'note warn' }, ...why),
-      helper
-        ? el('div', { class: 'btn-row' }, el('button', { class: 'btn primary', onclick: () => {
-          st.signalingUrl = helper; store.save(); app.setupRelay(); app.ui.emit('settings');
-        } }, `Use the helper at ${helper}`))
-        : el('div', {},
-          el('div', { class: 'btn-row' },
-            el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
-            el('button', { class: 'btn', onclick: async (e) => {
-              e.target.textContent = 'Looking…';
-              if (!(await app.detectHelper())) { e.target.textContent = 'Not found. Check again'; }
-            } }, 'Check again')),
-          el('div', { class: 'small muted' },
-            'Downloads a small setup file. Run it once: it installs Node.js if needed, starts the helper in the background on this computer and again at every sign-in, and asks once for admin so your phone and OBS on this network can connect. Then click Check again. ',
-            `On macOS or Linux: install Node.js and run node signaling-server/server.mjs --port ${HELPER_PORT}.`))];
-    }
-    if (app.relay?.state !== 'open') {
-      return [el('div', { class: 'note warn' }, `Can't reach the helper at ${st.signalingUrl}. It may not be running, or it was removed.`),
-        el('div', { class: 'btn-row' },
-          el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
-          el('button', { class: 'btn', onclick: () => app.setupRelay() }, 'Check again'),
-          el('button', { class: 'btn', title: 'Stop using this helper address', onclick: () => {
-            st.signalingUrl = ''; store.save(); app.helperOrigin = null; app.setupRelay(); app.ui.emit('settings'); app.detectHelper();
-          } }, 'Forget helper'))];
-    }
-    return null;
-  }
-
-  function obsActions(s, live) {
-    const guard = helperGuard(
-      'OBS sends its stream with an HTTP request, which a web page cannot receive. This needs the small optional helper (signaling-server/server.mjs) running next to the studio. ',
-      'It only passes the connection details on; the video goes straight from OBS to this browser.');
-    if (guard) return guard;
-    return [
-      el('div', { class: 'small muted' }, 'In OBS: Settings → Stream → Service: WHIP. Paste these two values:'),
-      field('Server', linkBox(sources.obsUrl(s.id), 'Copy')),
-      ...phoneUrlField(s),
-      field('Bearer Token', linkBox(s.cfg.token, 'Copy')),
-      el('div', { class: 'small muted' }, 'Use an H.264 encoder in OBS (Settings → Output), keyframe interval 1-2 s, up to about 8000 kb/s. Start Streaming in OBS and the source connects by itself.'),
-      el('div', { class: 'btn-row' },
-        live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect')
-          : s.state !== 'waiting' ? el('button', { class: 'btn primary', onclick: () => sources.reconnect(s.id) }, 'Accept encoder') : null,
-        el('button', { class: 'btn sm', title: 'Invalidate the old token', onclick: () => { sources.update(s.id, { token: uid(12) }); } }, 'New token')),
-    ];
-  }
-
-  // The address a phone or encoder on the home network can reach (not a
-  // Hyper-V or WSL virtual adapter).
-  function lanAddress() {
-    const lan = app.helperInfo?.lan || [];
-    return lan.find((a) => a.startsWith('192.168.')) || lan.find((a) => a.startsWith('10.')) || lan[0] || null;
-  }
-
-  function srtActions(s) {
-    const guard = helperGuard(
-      'A web page can\'t receive SRT. The helper on this computer listens for the SRT sender and converts the stream to WebRTC for this page with ffmpeg. ',
-      'That adds about half a second to a second of delay.');
-    if (guard) return guard;
-    const info = app.helperInfo;
-    if (info && !info.features?.includes('srt')) {
-      return [el('div', { class: 'note warn' }, info.ffmpeg
-        ? 'The ffmpeg on this computer is too old for SRT input. Run Install helper again, or update it with: winget upgrade Gyan.FFmpeg.Essentials'
-        : 'SRT input needs ffmpeg on this computer. Run Install helper again; it installs ffmpeg.'),
-      el('div', { class: 'btn-row' },
-        el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
-        el('button', { class: 'btn', onclick: () => app.detectHelper() }, 'Check again'))];
-    }
-    const listening = !!s.srt;
-    const change = (patch) => { sources.update(s.id, patch); if (s.srt) sources.startSrt(s.id); };
-    const port = num(s.cfg.srtPort, (v) => change({ srtPort: Math.round(v) }), { min: 1024, max: 65535, style: { width: '90px' } });
-    const latency = num(s.cfg.srtLatency, (v) => change({ srtLatency: Math.round(v) }), { min: 20, max: 8000, step: 10, style: { width: '90px' } });
-    const pass = text(s.cfg.srtPass || '', (v) => change({ srtPass: v.trim() }), { placeholder: 'Optional, 10-79 characters', autocomplete: 'off' });
-    const lan = lanAddress();
-    const st = s.srt?.info;
-    const status = !listening ? 'Not listening.'
-      : !st ? 'Starting…'
-        : st.state === 'error' ? 'The helper could not listen on this port.'
-          : `${st.state === 'listening' ? `Listening on UDP port ${st.port}` : 'Receiving'}${st.input?.video ? ` · input ${st.input.video}${st.input.audio ? ` + ${st.input.audio.toUpperCase()}` : ''}` : ''}${!st.encoder ? '' : /^pass-through/.test(st.encoder) ? ' · video passed through unchanged' : ` · converted with ${st.encoder}, up to ${st.height}p`}`;
-    return [
-      el('div', { class: 'small muted' }, 'In the SRT sender (Larix, vMix, OBS, a hardware encoder) choose mode Caller and enter:'),
-      lan ? field('Address from a phone or another computer', linkBox(`srt://${lan}:${s.cfg.srtPort}`, 'Copy')) : null,
-      field('Address from this computer', linkBox(`srt://127.0.0.1:${s.cfg.srtPort}`, 'Copy')),
-      el('div', { class: 'btn-row' }, field('Port (UDP)', port), field('Latency (ms)', latency)),
-      field('Passphrase', pass, 'If you set one, enter the same passphrase in the sender.'),
-      field('Video', select({ convert: 'Convert (any sender, scaled to the programme)', passthrough: 'Pass through (lowest CPU, H.264 senders)' }, s.cfg.srtVideo || 'convert', (v) => change({ srtVideo: v })),
-        (s.cfg.srtVideo || 'convert') === 'passthrough'
-          ? 'The sender\'s video goes to the studio unchanged: almost no CPU. The sender must send H.264 without B-frames (Larix and OBS defaults are fine) at no more than the programme size. If the picture stutters or stays black, switch back to Convert.'
-          : 'Works with any codec (HEVC, H.264). Uses the graphics chip when it can.'),
-      el('div', { class: 'small muted' },
-        `Use the same latency in the sender (${s.cfg.srtLatency} ms). `,
-        `From outside your network, forward UDP port ${s.cfg.srtPort} on your router to this computer.`),
-      el('div', { class: `card-detail ${st?.state === 'error' ? 'bad' : ''}` }, status),
-      el('div', { class: 'btn-row' },
-        listening ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Stop listening')
-          : el('button', { class: 'btn primary', onclick: () => sources.startSrt(s.id) }, 'Start listening')),
-    ];
   }
 
   function statsFor(s) {
@@ -372,11 +250,10 @@ function mountSettingsTab(app, root) {
   ];
 
   mountMixerPanel(app, root);
-  mountHelperPanel(app, root);
   root.append(
     el('div', { class: 'section-title' }, 'Connection infrastructure (all optional)'),
     el('div', { class: 'note' },
-      'This app needs only static hosting. The items below are optional helpers for difficult networks. ',
+      'This app needs only static hosting. The items below are optional extras for difficult networks. ',
       'STUN discovers public addresses; TURN relays media when two networks cannot connect directly (strict NAT/firewalls). ',
       'Without TURN, some contributor networks will not connect at all.'),
     el('div', { class: 'card' },
