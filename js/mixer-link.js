@@ -30,6 +30,21 @@ export function shotFrom(id) {
   return id.startsWith('src:') ? { kind: 'source', id: id.slice(4) } : { kind: 'scene', id };
 }
 
+// The show lives on the mixer, so every browser connected to it opens the same sources, scenes,
+// graphics and outputs. Connection settings, this page's layout and stream keys stay per browser.
+const SHOW_SETTINGS = ['format', 'mixerKbps', 'swapOnTake', 'defaultFit'];
+export function showOf(ws) {
+  return {
+    sources: ws.sources,
+    scenes: ws.scenes,
+    overlays: ws.overlays,
+    transition: ws.transition,
+    audio: { channels: ws.audio.channels, masterDb: ws.audio.masterDb, ftbAudio: ws.audio.ftbAudio },
+    outputs: ws.outputs.map(({ secret, ...o }) => o),
+    settings: Object.fromEntries(SHOW_SETTINGS.filter((k) => k in ws.settings).map((k) => [k, ws.settings[k]])),
+  };
+}
+
 function hash(str) { // FNV-1a, 32 bit, plus length: enough to name a graphic
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
@@ -184,7 +199,14 @@ export class MixerLink extends Emitter {
     } else if (m.t === 'hello') {
       this.info = m;
       if (m.name && m.name !== this.cfg.name) { this.cfg.name = m.name; this.app.store.save(); }
+      if (this._takeShow(m.show)) return; // reloading with the mixer's show
       this._activate();
+    } else if (m.t === 'show-saved') {
+      this.cfg.showRev = m.rev;
+      this.app.store.saveNow();
+    } else if (m.t === 'show-changed') {
+      this.showChanged = true; // edited in another browser; the alert offers a reload
+      this.emit('state');
     } else if (m.t === 'status') {
       this.status = m;
       this._applyStatus(m);
@@ -192,6 +214,39 @@ export class MixerLink extends Emitter {
     } else if (m.t === 'meters') {
       this.meters = m;
     }
+  }
+
+  // A browser that hasn't seen this mixer's latest show takes it and reloads, so its sources,
+  // scenes and outputs are the mixer's. A mixer without a show, or one this browser saved last,
+  // keeps this browser's (edits made while disconnected are sent on).
+  _takeShow(show) {
+    this.showChanged = false;
+    const local = JSON.stringify(showOf(this.app.store.ws));
+    this.sentShow = show && show.rev === this.cfg.showRev ? JSON.stringify(show.data) : null;
+    if (!show || show.rev === this.cfg.showRev) return false;
+    if (JSON.stringify(show.data) === local) {
+      this.cfg.showRev = show.rev;
+      this.sentShow = local;
+      this.app.store.saveNow();
+      return false;
+    }
+    const ws = this.app.store.ws;
+    const d = show.data;
+    // Keys aren't part of the show: the mixer keeps them. Keep this browser's for outputs it has.
+    const secrets = new Map(ws.outputs.map((o) => [o.id, o.secret]));
+    Object.assign(ws, {
+      sources: d.sources || [], scenes: d.scenes || [], overlays: d.overlays || [],
+      transition: d.transition || ws.transition,
+      outputs: (d.outputs || []).map((o) => (secrets.get(o.id) ? { ...o, secret: secrets.get(o.id) } : o)),
+    });
+    ws.audio = { ...ws.audio, ...(d.audio || {}) };
+    ws.settings = { ...ws.settings, ...(d.settings || {}) };
+    ws.shots = { preview: null, programme: null }; // the mixer's own come with its status
+    this.cfg.showRev = show.rev;
+    this.app.store.saveNow();
+    this.disconnect(true);
+    location.reload();
+    return true;
   }
 
   // ------------------------------------------------- entering mixer mode
@@ -264,6 +319,8 @@ export class MixerLink extends Emitter {
       outputs: this._outputs(),
     };
     if (!this.active) return;
+    const show = JSON.stringify(showOf(ws));
+    if (show !== this.sentShow) { this.sentShow = show; this.send({ t: 'show', data: JSON.parse(show) }); }
     const part = {};
     for (const [k, v] of Object.entries(payload)) {
       const s = JSON.stringify(v);

@@ -85,6 +85,10 @@ class Mixer:
                                has_video=lambda: self.mtx.has_video("program"))
         self.gfx: OrderedDict[str, bytes] = OrderedDict()
         self.ws = dict(store.data.get("workspace") or {})
+        # Stream keys are kept apart from the workspace, so the page never has to send them again.
+        self.keys: dict[str, str] = dict(store.data.get("output_keys") or {})
+        for o in self.ws.get("outputs") or []:
+            o["key"] = self.keys.get(o.get("id"), "")
         self.clients: set[web.WebSocketResponse] = set()
         self.status: dict = {}
         self.source_stats: dict = {}
@@ -141,6 +145,29 @@ class Mixer:
 
         go(program) if program is not None else self.engine.call(go)
         self.outputs.sync(self.ws.get("outputs") or [])
+
+    def _with_keys(self, outputs: list[dict]) -> list[dict]:
+        """A page that doesn't know an output's key sends none: keep the one the mixer has."""
+        for o in outputs:
+            oid = o.get("id")
+            if o.get("key"):
+                self.keys[oid] = o["key"]
+            else:
+                o["key"] = self.keys.get(oid, "")
+        ids = {o.get("id") for o in outputs}
+        self.keys = {k: v for k, v in self.keys.items() if k in ids}
+        self.store.data["output_keys"] = self.keys
+        return outputs
+
+    def set_show(self, data: dict) -> int:
+        """The page's own show (sources, scenes, graphics, outputs, audio, format), so every
+        browser connected to this mixer opens the same one. Stream keys are not part of it."""
+        for o in data.get("outputs") or []:
+            o.pop("key", None)
+        rev = int((self.store.data.get("show") or {}).get("rev") or 0) + 1
+        self.store.data["show"] = {"rev": rev, "data": data}
+        self.store.save()
+        return rev
 
     def _save(self) -> None:
         keep = {k: v for k, v in self.ws.items() if k != "outputs"}
@@ -228,6 +255,8 @@ class Mixer:
 
     def _apply_state(self, part: dict, adopt_shots: bool) -> None:
         fmt_before, kbps_before = self.fmt, self.ws.get("kbps")
+        if "outputs" in part:
+            part["outputs"] = self._with_keys(part["outputs"] or [])
         for k in ("format", "kbps", "sources", "scenes", "overlays", "transition", "audio", "swapOnTake", "outputs"):
             if k in part:
                 self.ws[k] = part[k]
@@ -382,13 +411,22 @@ def build_app(m: Mixer) -> web.Application:
         await ws.prepare(request)
         m.clients.add(ws)
         m.store.touch(c["id"])
-        await ws.send_str(json.dumps({"t": "hello", **m.info(), "workspace": {k: v for k, v in m.ws.items() if k != "outputs"}}))
+        await ws.send_str(json.dumps({"t": "hello", **m.info(), "workspace": {k: v for k, v in m.ws.items() if k != "outputs"},
+                                      "show": m.store.data.get("show")}))
         await ws.send_str(json.dumps(m.status_message()))
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
                     try:
-                        m.handle(json.loads(msg.data))
+                        data = json.loads(msg.data)
+                        if data.get("t") == "show":
+                            rev = m.set_show(data.get("data") or {})
+                            await ws.send_str(json.dumps({"t": "show-saved", "rev": rev}))
+                            for other in list(m.clients):  # other control rooms: the show changed
+                                if other is not ws and not other.closed:
+                                    await other.send_str(json.dumps({"t": "show-changed", "rev": rev}))
+                        else:
+                            m.handle(data)
                     except Exception:
                         log.exception("bad control message")
                 elif msg.type == WSMsgType.ERROR:

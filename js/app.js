@@ -134,6 +134,7 @@ function renderStatus() {
   if (audio.ctx.state !== 'running') alerts.push(['warn', 'Audio engine is paused by the browser until you interact with the page. Programme audio is silent until then.', 'Start audio', () => audio.ctx.resume()]);
   if (m.warn && !mx.active) alerts.push(['warn', m.warn]);
   if (mx.cfg.on && mx.cfg.token && mx.state === 'error') alerts.push(['warn', `Studio Mixer: ${mx.error} Until it is back, the studio runs in this browser.`]);
+  if (mx.active && mx.showChanged) alerts.push(['info', 'The show on the Studio Mixer was changed in another browser.', 'Reload to see it', () => location.reload()]);
   if (ms?.engineError) alerts.push(['bad', `The Studio Mixer could not start its mixing engine: ${ms.engineError}`]);
   const hw = hardwareWarning(srcs);
   if (hw) alerts.push(['warn', hw]);
