@@ -45,11 +45,14 @@ export function mountSide(app, root) {
 
 // ---------------------------------------------------------------------------
 // Source types offered in the Sources tab, in this order. Icons are 24x24 line
-// drawings (SVG path data), drawn in the text colour.
+// drawings (SVG path data), drawn in the text colour. WHEP and WHIP are a globe
+// with an arrow: WHEP plays from a server (arrow down), WHIP is an encoder
+// publishing (arrow up).
+const GLOBE = ['M17 10a7 7 0 1 1-14 0a7 7 0 1 1 14 0', 'M3 10h14', 'M10 3a10.5 10.5 0 0 1 0 14a10.5 10.5 0 0 1 0-14'];
 const SOURCE_KINDS = {
   peer: { label: 'Invite link', icon: ['M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5', 'M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5'] },
-  obs: { label: 'WHIP', icon: ['M12 16V4', 'M7 9l5-5 5 5', 'M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4'] },
-  whep: { label: 'WHEP', icon: ['M12 4v12', 'M7 11l5 5 5-5', 'M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4'] },
+  whep: { label: 'WHEP', icon: [...GLOBE, 'M19 14v7', 'M16 18l3 3 3-3'] },
+  obs: { label: 'WHIP (via helper)', icon: [...GLOBE, 'M19 21v-7', 'M16 17l3-3 3 3'] },
   srt: { label: 'SRT (via helper)', icon: ['M12 13v8', 'M9 21h6', 'M8.5 9.5a5 5 0 0 1 7 0', 'M5.5 6.5a9 9 0 0 1 13 0', 'M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'] },
 };
 
@@ -130,7 +133,7 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn sm', onclick: () => switcher.setPreview({ kind: 'source', id: s.id }) }, 'Preview'));
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
-      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · WHIP' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · invite link, relay' : ' · invite link, copy-paste',
+      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · WHIP via helper' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.mode === 'relay' ? ' · invite link, relay' : ' · invite link, copy-paste',
       s.info?.device ? ` · ${s.info.device}` : '');
     const detail = el('div', { class: `card-detail ${s.state === 'failed' ? 'bad' : ''}` }, s.detail || '');
     const err = errors.get(s.id) ? el('div', { class: 'card-detail bad' }, errors.get(s.id)) : null;
