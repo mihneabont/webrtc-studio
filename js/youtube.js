@@ -47,10 +47,8 @@ export function fmtClock(sec) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/** Can this browser capture a single element of the page (Chrome / Edge 132+)? Then the player stays hidden and its sound is captured. */
-export const elementCapture = () => typeof window.RestrictionTarget === 'function' && !!navigator.mediaDevices?.getDisplayMedia;
-/** Any capture at all. Without element capture (Firefox), the player must be visible, it shares a window, and there is no sound. */
-export const youTubeSupported = () => !!navigator.mediaDevices?.getDisplayMedia;
+/** Can this browser capture a single element of the page (Chrome / Edge 132+)? */
+export const youTubeSupported = () => typeof window.RestrictionTarget === 'function' && !!navigator.mediaDevices?.getDisplayMedia;
 
 const ERRORS = {
   2: 'The link doesn\'t point to a valid YouTube video.',
@@ -102,53 +100,24 @@ export class YouTubeStage {
    * needs one). Resolves to a MediaStream with the player's picture and the
    * tab's sound.
    */
-  async open(id, { videoId, start = 0, loop = false, width = 1280, height = 720, maxWidth = 1920, maxHeight = 1080, label = '' }) {
+  async open(id, { videoId, start = 0, loop = false, width = 1280, height = 720, maxWidth = 1920, maxHeight = 1080 }) {
     this.close(id);
-    const hidden = elementCapture();
-    if (hidden) this._mount();
+    this._mount();
     // Ask to share first, while the click still counts; the player loads meanwhile.
-    const capture = hidden
-      ? navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30 }, width: { max: maxWidth }, height: { max: maxHeight } },
-        // The video's sound goes to the programme only: not played out of this computer.
-        audio: { suppressLocalAudioPlayback: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude', systemAudio: 'exclude', monitorTypeSurfaces: 'exclude',
-      })
-      : navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: false });
+    const capture = navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 }, width: { max: maxWidth }, height: { max: maxHeight } },
+      // The video's sound goes to the programme only: not played out of this computer.
+      audio: { suppressLocalAudioPlayback: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude', systemAudio: 'exclude', monitorTypeSurfaces: 'exclude',
+    });
     const box = document.createElement('div');
     box.className = 'yt-box';
+    box.style.width = `${width}px`;
+    box.style.height = `${height}px`;
     const holder = document.createElement('div');
     box.append(holder);
-    let frame = null;
-    if (hidden) {
-      box.style.width = `${width}px`;
-      box.style.height = `${height}px`;
-      this.root.append(box);
-    } else {
-      // Firefox: the player has to be on screen to be captured. It sits in a
-      // small frame in a corner; the studio crops it out of the shared window.
-      width = 480; height = 270;
-      box.style.width = `${width}px`;
-      box.style.height = `${height}px`;
-      frame = document.createElement('div');
-      frame.className = 'yt-visible';
-      const grip = Object.assign(document.createElement('div'), { className: 'yt-visible-label', title: 'Drag to move', textContent: `YouTube${label ? ` · ${label}` : ''}: keep visible, this is what the studio shares (drag here to move)` });
-      frame.append(grip, box);
-      document.body.append(frame);
-      // Drag it out of the way: the crop follows wherever it is.
-      grip.addEventListener('pointerdown', (e) => {
-        const r = frame.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
-        grip.setPointerCapture(e.pointerId);
-        const move = (ev) => {
-          frame.style.left = `${Math.max(0, Math.min(window.innerWidth - r.width, ev.clientX - dx))}px`;
-          frame.style.top = `${Math.max(0, Math.min(window.innerHeight - r.height, ev.clientY - dy))}px`;
-          frame.style.right = frame.style.bottom = 'auto';
-        };
-        grip.addEventListener('pointermove', move);
-        grip.addEventListener('pointerup', () => grip.removeEventListener('pointermove', move), { once: true });
-      });
-    }
-    const entry = { player: null, box, frame, stream: null, loop, last: '', hidden, stop: null };
+    this.root.append(box);
+    const entry = { player: null, box, stream: null, loop, last: '' };
     this.players.set(id, entry);
     let stream;
     try {
@@ -156,56 +125,13 @@ export class YouTubeStage {
     } catch (e) {
       capture.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => {});
       this.close(id);
-      throw e.name === 'NotAllowedError' ? new Error(`Sharing was not allowed. Click Connect again and choose ${hidden ? 'Allow' : 'this Firefox window, then Allow'}.`) : e;
+      throw e.name === 'NotAllowedError' ? new Error('Sharing was not allowed. Click Connect again and choose Allow (the studio captures only the video).') : e;
     }
-    if (hidden) {
-      // Only the player's box, nothing else of the page (and not what covers it).
-      await stream.getVideoTracks()[0].restrictTo(await window.RestrictionTarget.fromElement(box));
-      entry.stream = stream;
-      return stream;
-    }
-    // Firefox: its sound can't reach the programme, so don't play it here either.
-    entry.player.mute();
-    entry.stream = this._crop(entry, stream);
-    return entry.stream;
-  }
-
-  // Cut the player out of a shared window or screen (Firefox), into a canvas stream.
-  _crop(entry, shared) {
-    const track = shared.getVideoTracks()[0];
-    const video = Object.assign(document.createElement('video'), { muted: true, playsInline: true, srcObject: shared });
-    video.play().catch(() => {});
-    const dpr = window.devicePixelRatio || 1;
-    const canvas = document.createElement('canvas');
-    const g = canvas.getContext('2d', { alpha: false });
-    const draw = () => {
-      const vw = video.videoWidth, vh = video.videoHeight;
-      if (!vw || !vh) return;
-      const r = entry.box.getBoundingClientRect();
-      const surface = track.getSettings().displaySurface;
-      let scale, ox, oy;
-      if (surface === 'monitor') { // a whole screen: the page's position on it
-        scale = vw / window.screen.width;
-        ox = (window.mozInnerScreenX ?? window.screenX) - (window.screen.left || 0);
-        oy = (window.mozInnerScreenY ?? window.screenY) - (window.screen.top || 0);
-      } else if (surface === 'browser') { // just the page
-        scale = vw / window.innerWidth; ox = 0; oy = 0;
-      } else { // a window: the page's position inside it, below the toolbars
-        scale = vw / window.outerWidth;
-        ox = (window.mozInnerScreenX ?? window.screenX) - window.screenX;
-        oy = (window.mozInnerScreenY ?? (window.screenY + window.outerHeight - window.innerHeight)) - window.screenY;
-      }
-      const sw = Math.round(r.width * scale), sh = Math.round(r.height * scale);
-      if (canvas.width !== Math.round(r.width * dpr)) { canvas.width = Math.round(r.width * dpr); canvas.height = Math.round(r.height * dpr); }
-      g.drawImage(video, Math.round((ox + r.left) * scale), Math.round((oy + r.top) * scale), sw, sh, 0, 0, canvas.width, canvas.height);
-    };
-    const timer = setInterval(draw, 1000 / 30);
-    const out = canvas.captureStream(30);
-    const outTrack = out.getVideoTracks()[0];
-    entry.stop = () => { clearInterval(timer); track.stop(); video.srcObject = null; };
-    // Stopping the share in Firefox's bar ends the source too.
-    track.addEventListener('ended', () => { entry.stop?.(); outTrack.stop(); outTrack.dispatchEvent(new Event('ended')); });
-    return out;
+    const video = stream.getVideoTracks()[0];
+    // Only the player's box, nothing else of the page (and not what covers it).
+    await video.restrictTo(await window.RestrictionTarget.fromElement(box));
+    entry.stream = stream;
+    return stream;
   }
 
   _player(id, entry, holder, videoId, start, width, height) {
@@ -246,11 +172,9 @@ export class YouTubeStage {
     const e = this.players.get(id);
     if (!e) return;
     this.players.delete(id);
-    e.stop?.();
     e.stream?.getTracks().forEach((t) => t.stop());
     try { e.player?.destroy?.(); } catch { /* already gone */ }
     e.box.remove();
-    e.frame?.remove();
   }
 
   _report(id, force = false) {
