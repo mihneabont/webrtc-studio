@@ -39,6 +39,7 @@ from .media import MV_BIG, MV_COLS, MV_HEIGHT, MV_TILE, MV_TILES, MV_WIDTH, Form
 from .mtx import MediaMTX, source_path
 from .outputs import Outputs, find_ffmpeg
 from .program import Program
+from .tunnel import Tunnel
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +51,25 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _tunneled(request: web.Request) -> bool:
+    """Came in through the https tunnel (cloudflared connects from this computer)."""
+    return any(h in request.headers for h in ("Cf-Connecting-Ip", "Cf-Ray", "X-Forwarded-For"))
+
+
 def _loopback(request: web.Request) -> bool:
-    return (request.remote or "") in ("127.0.0.1", "::1")
+    """A request from this computer itself. Tunnel traffic also arrives from 127.0.0.1,
+    so it is told apart by its headers and its Host, which is the public address."""
+    if (request.remote or "") not in ("127.0.0.1", "::1") or _tunneled(request):
+        return False
+    host = (request.host or "").rsplit(":", 1)[0].strip("[]").lower()
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
+def _client_ip(request: web.Request) -> str:
+    # Behind the tunnel every request comes from 127.0.0.1; Cloudflare says who it really is.
+    if _tunneled(request) and (request.remote or "") in ("127.0.0.1", "::1"):
+        return request.headers.get("Cf-Connecting-Ip") or "tunnel"
+    return request.remote or "?"
 
 
 class Mixer:
@@ -77,6 +95,9 @@ class Mixer:
         self._last_status = 0.0
         self._status_pending = False
         self.engine = Engine(self._make_program, settings.encoder)
+        # Tell connected studios when the https address appears or changes.
+        self.tunnel = Tunnel(settings.cloudflared_bin if settings.tunnel else None, settings.ports.http,
+                             lambda: self._threadsafe(lambda: self._broadcast({"t": "info", **self.info()})))
 
     # ============================================================ engine
 
@@ -259,6 +280,8 @@ class Mixer:
             "app": "studio-mixer", "version": __version__, "name": self.store.data["name"],
             "platform": sys.platform, "startedAt": self.started_at, "port": port,
             "lan": [f"http://{ip}:{port}" for ip in lan_addresses()],
+            "public": self.tunnel.url,
+            "tunnel": {"state": self.tunnel.state, "error": self.tunnel.error},
             "features": ["mixer", "srt", "rtmp", "whip-in", "outputs"],
             "encoder": self.engine.encoder.name if self.engine.encoder else None,
             "ffmpeg": bool(self.ffmpeg), "paired": len(self.store.data["clients"]),
@@ -308,11 +331,14 @@ def build_app(m: Mixer) -> web.Application:
         return web.json_response(m.info())
 
     async def pair(request: web.Request):
-        ip = request.remote or "?"
+        ip = _client_ip(request)
         now = time.time()
         recent = [t for t in m.pair_attempts.get(ip, []) if now - t < 60]
-        if len(recent) >= 5:
+        # The tunnel makes the mixer reachable from anywhere: also cap guesses from everyone together.
+        everyone = [t for ts in m.pair_attempts.values() for t in ts if now - t < 60]
+        if len(recent) >= 5 or len(everyone) >= 30:
             raise web.HTTPTooManyRequests(text="Too many attempts. Wait a minute and try again.")
+        m.pair_attempts = {k: [t for t in v if now - t < 60] for k, v in m.pair_attempts.items() if any(now - t < 60 for t in v)}
         m.pair_attempts[ip] = recent + [now]
         body = await request.json()
         code = str(body.get("code", "")).strip().replace(" ", "")
@@ -345,7 +371,8 @@ def build_app(m: Mixer) -> web.Application:
         code = m.store.data["pair_code"] if local else None
         return web.Response(text=HOME_HTML.replace("{{NAME}}", m.store.data["name"].replace("<", "&lt;"))
                             .replace("{{CODE}}", f"{code[:3]} {code[3:]}" if code else "shown on the mixer computer")
-                            .replace("{{ADDR}}", " · ".join(m.info()["lan"])).replace("{{VERSION}}", __version__),
+                            .replace("{{ADDR}}", " · ".join(m.info()["lan"])).replace("{{VERSION}}", __version__)
+                            .replace("{{PUBLIC}}", m.tunnel.url or ("starting…" if m.tunnel.state == "starting" else "none (" + (m.tunnel.error or "off") + ")")),
                             content_type="text/html")
 
     async def control(request: web.Request):
@@ -479,7 +506,8 @@ border-radius:8px;background:#e11d48;color:#fff;cursor:pointer}</style>"""
 HOME_HTML = f"""<!doctype html><meta charset=utf-8><title>Studio Mixer</title>{STYLE}<main>
 <h1>Studio Mixer · {{{{NAME}}}}</h1><p class=muted>Version {{{{VERSION}}}} is running.</p>
 <p>To connect a studio, open the studio page, go to Settings, Mixer, and enter this pairing code:</p>
-<div class=code>{{{{CODE}}}}</div><p class=muted>Mixer address on your network: {{{{ADDR}}}}</p></main>"""
+<div class=code>{{{{CODE}}}}</div><p>https address (use this in the studio page): <b>{{{{PUBLIC}}}}</b></p>
+<p class=muted>Mixer address on your network: {{{{ADDR}}}}</p></main>"""
 
 PAIR_HTML = f"""<!doctype html><meta charset=utf-8><title>Connect to Studio Mixer</title>{STYLE}<main>
 <h1>Connect this studio to the mixer?</h1><p class=muted>{{{{ORIGIN_TEXT}}}} wants to control the mixer
@@ -499,6 +527,7 @@ async def serve(m: Mixer) -> None:
     await web.TCPSite(runner, m.settings.bind, m.settings.ports.http).start()
     # MediaMTX asks this API to authorise connections, so it starts after the API is listening.
     m.mtx.start()
+    m.tunnel.start()
     await asyncio.sleep(1.0)
     await asyncio.to_thread(m.start_engine)
     asyncio.ensure_future(m.poll_sources())
@@ -516,6 +545,7 @@ async def serve(m: Mixer) -> None:
         await stop.wait()
     finally:
         m.outputs.stop_all()
+        m.tunnel.stop()
         await asyncio.to_thread(m.engine.stop)
         m.mtx.stop()
         await m.http.close()

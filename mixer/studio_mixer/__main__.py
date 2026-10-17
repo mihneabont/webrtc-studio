@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .config import Ports, Settings, Store, default_data_dir
 from .server import Mixer, serve
+from .tunnel import find_cloudflared
 
 HERE = Path(__file__).resolve().parent
 
@@ -34,6 +35,9 @@ def main() -> None:
     ap.add_argument("--ffmpeg", default=os.environ.get("MIXER_FFMPEG"))
     ap.add_argument("--host", default=os.environ.get("MIXER_PUBLIC_HOST"), help="public address for WebRTC")
     ap.add_argument("--encoder", default=os.environ.get("MIXER_ENCODER"), help="force a GStreamer H.264 encoder")
+    ap.add_argument("--cloudflared", default=os.environ.get("MIXER_CLOUDFLARED"), help="path to cloudflared")
+    ap.add_argument("--no-tunnel", action="store_true", default=os.environ.get("MIXER_TUNNEL", "1") == "0",
+                    help="don't open an https address through a Cloudflare quick tunnel")
     args = ap.parse_args()
 
     args.data.mkdir(parents=True, exist_ok=True)
@@ -43,7 +47,8 @@ def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), handlers=handlers,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = Settings(data_dir=args.data, ports=Ports(http=args.port), mediamtx_bin=find_mediamtx(args.mediamtx),
-                        ffmpeg_bin=args.ffmpeg, public_host=args.host, encoder=args.encoder)
+                        ffmpeg_bin=args.ffmpeg, public_host=args.host, encoder=args.encoder,
+                        cloudflared_bin=find_cloudflared(args.cloudflared, HERE.parent), tunnel=not args.no_tunnel)
     mixer = Mixer(settings, Store(args.data / "mixer.json"))
     try:
         asyncio.run(serve(mixer))
