@@ -93,7 +93,7 @@ export class MixerLink extends Emitter {
       r = await fetch(`${url}/api/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: `${location.host} studio` }) });
     } catch {
       throw new Error(`Can't reach a mixer at ${url}. ${location.protocol === 'https:' && url.startsWith('http:') && !/\/\/(localhost|127\.0\.0\.1)/.test(url)
-        ? 'This page is on https, so the browser blocks plain http addresses other than localhost. Use the mixer\'s https (tunnel) address.' : 'Check the address and that the mixer is running.'}`);
+        ? 'This page is on https, so the browser blocks plain http addresses other than localhost. Use the mixer\'s https address instead: it is shown on the mixer\'s own page (open http://localhost:8788 on the mixer computer). If the mixer runs on this computer, use Connect to it above.' : 'Check the address and that the mixer is running.'}`);
     }
     if (!r.ok) throw new Error((await r.text()) || `Pairing failed (${r.status}).`);
     const res = await r.json();
@@ -178,7 +178,10 @@ export class MixerLink extends Emitter {
   }
 
   _onMessage(m) {
-    if (m.t === 'hello') {
+    if (m.t === 'info') { // e.g. the mixer's https address appeared or changed
+      this.info = { ...this.info, ...m };
+      this.emit('state');
+    } else if (m.t === 'hello') {
       this.info = m;
       if (m.name && m.name !== this.cfg.name) { this.cfg.name = m.name; this.app.store.save(); }
       this._activate();
@@ -462,6 +465,9 @@ export class MixerLink extends Emitter {
     const hosts = [];
     if (local) for (const l of this.info?.lan || []) { try { hosts.push({ label: 'From another device on your network', http: l.replace(/\/+$/, ''), host: new URL(l).hostname }); } catch { /* skip */ } }
     hosts.unshift({ label: local ? 'From this computer' : 'Address', http: this.url, host: local ? '127.0.0.1' : base.hostname });
+    // The https address (tunnel) carries WHIP from anywhere; SRT and RTMP can't go through it.
+    const pub = this.info?.public;
+    if (pub && pub !== this.url) hosts.push({ label: 'From anywhere (https)', http: pub, host: null, whipOnly: true });
     return hosts.map((h) => ({
       label: h.label,
       whip: `${h.http}/api/whip/${s.id}`,

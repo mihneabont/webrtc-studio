@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from gi.repository import GLib, Gst
 
@@ -72,27 +72,35 @@ def rgba_hex(color: str | None, default: int = 0xFF000000) -> int:
 class Encoder:
     name: str
     hardware: bool
+    # Constrained Baseline decodes in every browser (Firefox and phones included);
+    # set by pick_encoder when this encoder can produce it.
+    baseline_ok: bool = False
 
-    def describe(self, kbps: int, gop: int, low_latency: bool = True) -> str:
+    @property
+    def preview_profile(self) -> str:
+        """For streams only browsers watch (the multiview): the profile every browser decodes."""
+        return "constrained-baseline" if self.baseline_ok else "main"
+
+    def describe(self, kbps: int, gop: int, low_latency: bool = True, profile: str = "main") -> str:
         """A launch-line fragment: raw video in, H.264 byte-stream out."""
         n = self.name
         if n == "x264enc":
             preset = "veryfast" if kbps >= 3000 else "ultrafast"
             return (f"videoconvert ! video/x-raw,format=I420 ! x264enc bitrate={kbps} key-int-max={gop} "
                     f"bframes=0 tune=zerolatency speed-preset={preset} threads=0 "
-                    "option-string=nal-hrd=cbr ! video/x-h264,profile=main")
+                    f"option-string=nal-hrd=cbr ! video/x-h264,profile={profile}")
         if n == "qsvh264enc":
             return (f"videoconvert ! video/x-raw,format=NV12 ! qsvh264enc bitrate={kbps} max-bitrate={kbps} "
-                    f"rate-control=cbr gop-size={gop} b-frames=0 ! video/x-h264,profile=main")
+                    f"rate-control=cbr gop-size={gop} b-frames=0 ! video/x-h264,profile={profile}")
         if n == "nvh264enc":
             return (f"videoconvert ! video/x-raw,format=NV12 ! nvh264enc bitrate={kbps} rc-mode=cbr "
-                    f"gop-size={gop} bframes=0 zerolatency=true ! video/x-h264,profile=main")
+                    f"gop-size={gop} bframes=0 zerolatency=true ! video/x-h264,profile={profile}")
         if n == "amfh264enc":
             return (f"videoconvert ! video/x-raw,format=NV12 ! amfh264enc bitrate={kbps} rate-control=cbr "
-                    f"gop-size={gop} b-frames=0 usage=low-latency ! video/x-h264,profile=main")
+                    f"gop-size={gop} b-frames=0 usage=low-latency ! video/x-h264,profile={profile}")
         if n == "mfh264enc":
             return (f"videoconvert ! video/x-raw,format=NV12 ! mfh264enc bitrate={kbps} rc-mode=cbr "
-                    f"gop-size={gop} bframes=0 low-latency=true ! video/x-h264,profile=main")
+                    f"gop-size={gop} bframes=0 low-latency=true ! video/x-h264,profile={profile}")
         raise ValueError(n)
 
 
@@ -100,13 +108,13 @@ CANDIDATES = [Encoder("qsvh264enc", True), Encoder("nvh264enc", True), Encoder("
               Encoder("mfh264enc", True), Encoder("x264enc", False)]
 
 
-def _works(enc: Encoder) -> bool:
+def _works(enc: Encoder, profile: str = "main") -> bool:
     if Gst.ElementFactory.find(enc.name) is None:
         return False
     try:
         p = Gst.parse_launch(
             "videotestsrc num-buffers=15 ! video/x-raw,width=1280,height=720,framerate=30/1 ! "
-            f"{enc.describe(2000, 30)} ! h264parse ! fakesink"
+            f"{enc.describe(2000, 30, profile=profile)} ! h264parse ! fakesink"
         )
     except GLib.Error:
         return False
@@ -124,7 +132,8 @@ def pick_encoder(prefer: str | None = None, skip: set[str] | None = None) -> Enc
         order = [e for e in order if e.name == prefer] + [e for e in order if e.name != prefer]
     for enc in order:
         if _works(enc):
-            log.info("video encoder: %s", enc.name)
+            enc = replace(enc, baseline_ok=_works(enc, "constrained-baseline"))
+            log.info("video encoder: %s (preview profile %s)", enc.name, enc.preview_profile)
             return enc
         log.debug("encoder %s not usable", enc.name)
     raise RuntimeError("no working H.264 encoder (x264enc missing?)")

@@ -41,6 +41,8 @@ class Settings:
     bind: str = "0.0.0.0"
     public_host: str | None = None
     encoder: str | None = None  # force an encoder, e.g. x264enc
+    cloudflared_bin: str | None = None  # https address through a Cloudflare quick tunnel
+    tunnel: bool = True
 
 
 def lan_addresses() -> list[str]:

@@ -11,13 +11,14 @@ $Py = Join-Path $App '.venv\Scripts\python.exe'
 $Startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Studio Mixer.lnk'
 $Port = 8788
 $MtxVersion = 'v1.21.2'
+$CfVersion = '2026.9.3' # cloudflared: the mixer's https address (Cloudflare quick tunnel)
 $Files = 'studio_mixer/__init__.py', 'studio_mixer/__main__.py', 'studio_mixer/config.py', 'studio_mixer/host.py',
     'studio_mixer/ingest.py', 'studio_mixer/media.py', 'studio_mixer/mtx.py', 'studio_mixer/outputs.py',
     'studio_mixer/program.py', 'studio_mixer/publisher.py', 'studio_mixer/scene.py', 'studio_mixer/server.py',
-    'windows/requirements.txt', 'windows/firewall.ps1'
+    'studio_mixer/tunnel.py', 'windows/requirements.txt', 'windows/firewall.ps1'
 
 function Stop-Mixer {
-    Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe' OR Name='mediamtx.exe'" |
+    Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe' OR Name='mediamtx.exe' OR Name='cloudflared.exe'" |
         Where-Object { $_.CommandLine -like '*studio_mixer*' -or $_.ExecutablePath -like "$App\*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
@@ -104,6 +105,17 @@ if (-not (Test-Path $mtxStamp)) {
     Expand-Archive -Force $zip $tmp
     Copy-Item -Force "$tmp\mediamtx.exe" $mtx
     New-Item -ItemType File -Force -Path $mtxStamp | Out-Null
+}
+
+# Studio pages are on https and can't call a plain http mixer on another address, so the
+# mixer opens a free Cloudflare quick tunnel at start and shows its https address.
+$cf = Join-Path $App 'bin\cloudflared.exe'
+$cfStamp = Join-Path $App "bin\cloudflared-$CfVersion"
+if (-not (Test-Path $cfStamp)) {
+    Write-Host "Downloading cloudflared $CfVersion (gives the mixer an https address)..."
+    Invoke-WebRequest -UseBasicParsing "https://github.com/cloudflare/cloudflared/releases/download/$CfVersion/cloudflared-windows-amd64.exe" -OutFile $cf
+    Get-ChildItem (Join-Path $App 'bin') -Filter 'cloudflared-*' | Remove-Item -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType File -Force -Path $cfStamp | Out-Null
 }
 
 if (-not (Find-Ffmpeg)) {

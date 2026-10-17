@@ -2,7 +2,7 @@
 // another one), see its state, pause or forget it, or install one.
 import { el } from '../util.js';
 import { MIXER_PORT, downloadMixerInstaller } from './mixer-install.js';
-import { field, text } from './forms.js';
+import { field, text, linkBox } from './forms.js';
 
 export function mountMixerPanel(app, root) {
   const mixer = app.mixer;
@@ -42,10 +42,18 @@ export function mountMixerPanel(app, root) {
       parts.push(el('div', { class: 'statline' },
         el('span', {}, el('em', {}, 'mixer'), cfg.name || '–'),
         el('span', {}, el('em', {}, 'address'), cfg.url),
+        mixer.info?.public && mixer.info.public !== cfg.url ? el('span', {}, el('em', {}, 'https'), mixer.info.public) : null,
         mixer.info?.version ? el('span', {}, el('em', {}, 'version'), String(mixer.info.version)) : null,
         s?.encoder ? el('span', {}, el('em', {}, 'encoder'), s.encoder) : null,
         s ? el('span', {}, el('em', {}, 'programme'), `${s.format.width}×${s.format.height} · ${s.fps ?? '–'} fps · ${s.kbps} kb/s`) : null,
         s ? el('span', {}, el('em', {}, 'control rooms'), String(s.clients)) : null));
+      const tun = mixer.info?.tunnel;
+      if (mixer.info?.public && mixer.info.public !== cfg.url) {
+        parts.push(field('https address, to reach this mixer from another computer or a phone', linkBox(mixer.info.public, 'Copy'),
+          'It changes when the mixer restarts. To pair another studio, use it with the code on the mixer\'s page.'));
+      } else if (tun && (tun.state === 'error' || tun.state === 'off') && !/^https:/.test(cfg.url)) {
+        parts.push(el('div', { class: 'small muted' }, `No https address for this mixer${tun.error ? ` (${tun.error})` : ''}. It is only needed to reach the mixer from another computer or a phone; run the mixer setup again to add it.`));
+      }
       if (mixer.state === 'error' && cfg.on) parts.push(el('div', { class: 'note warn' }, mixer.error || 'Not reachable.'));
       if (mixer.active && mixer.previewError) parts.push(el('div', { class: 'note warn' }, mixer.previewError));
       if (s?.engineError) parts.push(el('div', { class: 'note bad' }, `The mixer could not start its mixing engine: ${s.engineError}`));
@@ -71,7 +79,7 @@ export function mountMixerPanel(app, root) {
         el('div', { class: 'small muted' }, 'Downloads a setup file. Run it: it installs the mixer and everything it needs, starts it in the background now and at every sign-in, and asks once for admin to open its ports in the firewall. Then come back here and click Check again.'));
       }
       parts.push(el('div', { class: 'section-title' }, 'Mixer on another computer'),
-        field('Mixer address', addrIn, 'Its network address, or the https address it is published at. Open the mixer\'s page on that computer (it opens after installing) to see the address and the pairing code.'),
+        field('Mixer address', addrIn, 'Its https address (https://….trycloudflare.com). Open the mixer\'s page on that computer (http://localhost:8788) to see it and the pairing code. A plain http network address only works when this page itself is opened over http.'),
         el('div', { class: 'btn-row' }, codeIn,
           el('button', { class: 'btn', disabled: busy, onclick: () => run(() => mixer.pairWithCode(addrIn.value, codeIn.value.trim())) }, busy ? 'Pairing…' : 'Pair')));
     }

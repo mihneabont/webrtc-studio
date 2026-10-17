@@ -166,7 +166,7 @@ function mountSourcesTab(app, root) {
   // OBS, SRT and RTMP senders publish straight to the mixer, each source with its own key.
   function mixerActions(s) {
     const out = [];
-    const addrs = app.mixer.addresses(s);
+    const addrs = app.mixer.addresses(s).filter((a) => s.cfg.kind === 'obs' || !a.whipOnly);
     for (const a of addrs) {
       if (addrs.length > 1) out.push(el('div', { class: 'small muted' }, `${a.label}:`));
       if (s.cfg.kind === 'obs') {

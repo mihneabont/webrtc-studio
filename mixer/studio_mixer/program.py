@@ -89,7 +89,7 @@ class Program:
         self.fps_count = 0
         self.fps = 0.0
         # Encoded frames per encoder this second, and for how many seconds frames went in but none came out.
-        self.enc_count = {"pgmenc": 0, "mvenc": 0}
+        self.enc_count = {"pparse": 0, "mvparse": 0}
         self.enc_stalled = 0
 
     # =============================================================== build
@@ -98,19 +98,19 @@ class Program:
         f = self.fmt
         gop = f.fps * 2
         enc = self.encoder.describe(self.kbps, gop)
-        mv_enc = self.encoder.describe(2500, MV_FPS * 2)
+        mv_enc = self.encoder.describe(2500, MV_FPS * 2, profile=self.encoder.preview_profile)
         leaky = "queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream"
         desc = (
             f"compositor name=pgm background=black force-live=true latency={Gst.SECOND // f.fps} ! "
             f"video/x-raw,width={f.width},height={f.height},framerate={f.fps}/1 ! videoconvert ! "
             "video/x-raw,format=I420 ! identity name=pgmrate ! tee name=pt allow-not-linked=true "
-            f"pt. ! {leaky} ! {enc} ! h264parse name=pgmenc config-interval=-1 ! queue ! pmux. "
+            f"pt. ! {leaky} ! {enc} ! h264parse name=pparse config-interval=-1 ! queue ! pmux. "
             f"pt. ! {leaky} ! videoscale ! video/x-raw,width={MV_BIG[0]},height={MV_BIG[1]} ! mv.sink_0 "
             f"compositor name=pvw background=black force-live=true ! "
             f"video/x-raw,width={MV_BIG[0]},height={MV_BIG[1]},framerate={MV_FPS}/1 ! {leaky} ! mv.sink_1 "
             f"compositor name=mv background=black force-live=true ! "
             f"video/x-raw,width={MV_WIDTH},height={MV_HEIGHT},framerate={MV_FPS}/1 ! {leaky} ! {mv_enc} ! "
-            "h264parse name=mvenc config-interval=-1 ! queue ! mvmux. "
+            "h264parse name=mvparse config-interval=-1 ! queue ! mvmux. "
             # Fade to black sits on top of everything on Programme.
             f"videotestsrc is-live=true pattern=black ! video/x-raw,format=AYUV,width=16,height=16,framerate={f.fps}/1 ! pgm.sink_0 "
             f"videotestsrc is-live=true pattern=black ! video/x-raw,format=AYUV,width=16,height=16,framerate={MV_FPS}/1 ! pvw.sink_0 "
@@ -138,23 +138,52 @@ class Program:
         base.set_property("height", MV_BIG[1])
         self.mv.get_static_pad("sink_0").set_property("xpos", MV_BIG[0])
         self.pipeline.get_by_name("pgmrate").get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._count_frame)
-        for name in ("pgmenc", "mvenc"):
+        for name in ("pparse", "mvparse"):
             self.pipeline.get_by_name(name).get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._count_encoded, name)
 
-        for sink_name, path in (("pgm_out", "program"), ("mv_out", "multiview")):
+        for sink_name, path, parse in (("pgm_out", "program", "pparse"), ("mv_out", "multiview", "mvparse")):
             pub = SrtPublisher(path, self.srt_uri, self.streamid(path))
             pub.attach(self.pipeline.get_by_name(sink_name))
             self.publishers.append(pub)
+            self._start_on_video(pub, self.pipeline.get_by_name(parse))
         bus = self.pipeline.get_bus()
         bus.add_signal_watch()
         bus.connect("message", self._on_message)
-        for pub in self.publishers:
-            pub.start()
         self.pipeline.set_state(Gst.State.PLAYING)
         self._apply_master()
         self._timers.append(GLib.timeout_add(250, self._status_tick))
         self._timers.append(GLib.timeout_add(1000, self._fps_tick))
         log.info("mixer running at %dx%d %dfps, %d kbps with %s", f.width, f.height, f.fps, self.kbps, self.encoder.name)
+
+    def _start_on_video(self, pub: SrtPublisher, parse: Gst.Element) -> None:
+        """Start publishing only once the first encoded video frame exists.
+
+        Audio is ready at once but the H.264 encoder takes a moment (longer with no
+        sources). Until it has output, the video stream has no caps, so the first
+        MPEG-TS tables list audio only, and MediaMTX keeps the path audio-only for
+        good: a black preview, and outputs failing with "Stream map matches no
+        streams". Waiting for the first video buffer avoids that."""
+        state = {"done": False, "timer": None}
+
+        def go(why: str) -> bool:
+            if state["timer"] in self._timers:  # it fires once; stop() must not remove it again
+                self._timers.remove(state["timer"])
+                if not why:
+                    GLib.source_remove(state["timer"])
+            if not state["done"] and pub in self.publishers:
+                state["done"] = True
+                if why:
+                    log.warning("publishing %s %s", pub.name, why)
+                pub.start()
+            return False
+
+        def first_video(_pad, _info):
+            GLib.idle_add(go, "")
+            return Gst.PadProbeReturn.REMOVE
+
+        parse.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, first_video)
+        state["timer"] = GLib.timeout_add(10000, go, "without video: the encoder produced nothing for 10 s")
+        self._timers.append(state["timer"])
 
     def stop(self) -> None:
         for t in self._timers:
@@ -167,6 +196,7 @@ class Program:
             self._remove_source(s)
         for pub in self.publishers:
             pub.stop()
+        self.publishers.clear()  # a late first-video callback must not start them again
         if self.pipeline is not None:
             self.pipeline.get_bus().remove_signal_watch()
             self.pipeline.set_state(Gst.State.NULL)
