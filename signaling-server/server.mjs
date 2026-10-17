@@ -47,7 +47,7 @@ const MAX_BODY = 256 * 1024;
 const MAX_CHUNK = 16 * 1024 * 1024;
 // Bumped when the studio page needs something new from the helper, so the page
 // can offer an update to an older install.
-const HELPER_VERSION = 5;
+const HELPER_VERSION = 6;
 const STARTED_AT = new Date().toISOString();
 
 const rooms = new Map(); // room -> Map(peer -> {res, queue})
@@ -326,7 +326,7 @@ function pickEncoder(ff) {
   return pick;
 }
 
-function startSrt({ room, slot, token, port, latency, passphrase, kbps, height }) {
+function startSrt({ room, slot, token, port, latency, passphrase, kbps, height, video }) {
   const ff = findFfmpeg();
   if (!ff) throw Object.assign(new Error('ffmpeg is not installed on this computer. Run the helper installer again, or install ffmpeg.'), { status: 501 });
   if (!ffmpegCanSrt(ff)) throw Object.assign(new Error('The ffmpeg on this computer is too old for SRT input (it needs SRT and WHIP support, ffmpeg 8 or later). Update it with: winget upgrade Gyan.FFmpeg.Essentials'), { status: 501 });
@@ -339,7 +339,7 @@ function startSrt({ room, slot, token, port, latency, passphrase, kbps, height }
     else if (o.port === port) throw Object.assign(new Error(`Port ${port} is already used by another SRT source.`), { status: 409 });
   }
   const s = { id: crypto.randomUUID(), room, slot, token: String(token || ''), port, latency: Math.max(20, Math.min(8000, Number(latency) || 200)),
-    passphrase: passphrase || '', kbps: Math.max(500, Math.min(20000, Number(kbps) || 6000)), height: Math.max(144, Math.min(2160, Number(height) || 1080)), state: 'listening', input: null, stats: null,
+    passphrase: passphrase || '', kbps: Math.max(500, Math.min(20000, Number(kbps) || 6000)), height: Math.max(144, Math.min(2160, Number(height) || 1080)), video: video === 'passthrough' ? 'passthrough' : 'convert', state: 'listening', input: null, stats: null,
     errors: [], last: Date.now(), p: null, stopped: false, restarts: 0 };
   srt.set(s.id, s);
   runSrt(s);
@@ -352,15 +352,26 @@ function runSrt(s) {
   const q = new URLSearchParams({ mode: 'listener', latency: String(s.latency * 1000), transtype: 'live' });
   if (s.passphrase) { q.set('passphrase', s.passphrase); q.set('pbkeylen', '16'); }
   const gop = '60';
-  const enc = pickEncoder(ff);
-  s.encoder = enc.label;
-  // Decode on the GPU when possible (falls back to the CPU by itself), and never
-  // encode more pixels than the programme uses: a 4K or 1080p sender into a
-  // 720p programme is scaled down first, which makes the encode much cheaper.
-  const argv = ['-hide_banner', '-loglevel', 'info', '-stats', '-hwaccel', 'auto', '-fflags', '+genpts', '-i', `srt://0.0.0.0:${s.port}?${q}`,
+  const enc = s.video === 'passthrough' ? null : pickEncoder(ff);
+  // Cheapest first. Pass-through: the sender's H.264 goes on unchanged (the
+  // operator picks it; it needs H.264 without B-frames). Quick Sync: decode,
+  // scale and encode all on the graphics chip, so frames never travel back to
+  // the CPU (measured on an i5-12450H, 1080p in, 720p out: 22% of one core,
+  // versus 46% when only the encode is on the GPU and 103% with x264). If that
+  // fails for this sender (e.g. a codec the chip can't decode), fall back to
+  // GPU decode where possible + CPU scaling + the chosen encoder. Either way,
+  // never encode more lines than the programme uses.
+  const mode = !enc ? 'copy' : enc.name === 'h264_qsv' && !s.qsvFullFailed ? 'qsv' : 'mixed';
+  s.mode = mode;
+  s.encoder = mode === 'copy' ? 'pass-through (not converted)' : mode === 'qsv' ? 'Intel Quick Sync (decode, scale and encode)' : enc.label;
+  const scaleH = `'min(ih,${s.height})'`;
+  const video = mode === 'copy' ? ['-c:v', 'copy']
+    : mode === 'qsv' ? ['-vf', `scale_qsv=w=-1:h=${scaleH}`, ...enc.args(s.kbps, gop)]
+      : ['-vf', `scale=-2:${scaleH}`, ...enc.args(s.kbps, gop)];
+  const decode = mode === 'qsv' ? ['-hwaccel', 'qsv', '-hwaccel_output_format', 'qsv'] : mode === 'mixed' ? ['-hwaccel', 'auto'] : [];
+  const argv = ['-hide_banner', '-loglevel', 'info', '-stats', ...decode, '-fflags', '+genpts', '-i', `srt://0.0.0.0:${s.port}?${q}`,
     '-map', '0:v:0?', '-map', '0:a:0?',
-    '-vf', `scale=-2:'min(ih,${s.height})'`,
-    ...enc.args(s.kbps, gop),
+    ...video,
     '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-b:a', '128k',
     '-f', 'whip', '-whip_flags', 'dtls_active', '-handshake_timeout', '10000', '-authorization', s.token,
     `http://127.0.0.1:${PORT}/whip-in/${s.room}/${s.slot}?srt=${s.id}`];
@@ -400,6 +411,12 @@ function runSrt(s) {
     if (s.stopped) return;
     const was = s.state;
     s.state = 'listening'; s.stats = null;
+    // The all-GPU path failed for this sender before any frame went out: use the
+    // mixed path from now on (the sender reconnects by itself).
+    if (s.mode === 'qsv' && was === 'connecting') {
+      s.qsvFullFailed = true;
+      log(`SRT ${s.slot}: Quick Sync could not decode/scale this input (${s.errors.slice(-1)[0] || `exit ${code}`}); switching to GPU encode only`);
+    }
     if (was !== 'listening') log(`SRT ${s.slot} on port ${s.port}: sender gone (ffmpeg exit ${code}) ${s.errors.slice(-2).join(' | ')}; listening again`);
     // A listener that dies at once (port taken, bad option) would spin: back off.
     s.restarts = was === 'listening' ? s.restarts + 1 : 0;

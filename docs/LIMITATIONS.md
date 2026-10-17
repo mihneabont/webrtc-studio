@@ -120,10 +120,15 @@ time.
   re-encodes, adding about 0.5 to 1 s of delay on top of the SRT latency. To
   keep that cheap, ffmpeg decodes on the GPU when it can (`-hwaccel auto`),
   encodes with the first hardware H.264 encoder that passes a test encode
-  (NVENC, Intel Quick Sync, AMD AMF; x264 `veryfast` otherwise, roughly one
-  core for 1080p30), and scales the source down to the programme height
-  first, so a 1080p sender into a 720p programme costs about half. The source
-  card shows which encoder is in use. The hardware paths are untested.
+  (NVENC, Intel Quick Sync, AMD AMF; x264 `veryfast` otherwise), and scales
+  the source down to the programme height first. With Quick Sync, decode,
+  scale and encode all stay on the graphics chip; if that fails for a sender,
+  the helper falls back to GPU decode + CPU scaling + hardware encode.
+  Measured on an i5-12450H, 1080p HEVC in, 720p out (100% = one core): x264
+  103%, hardware encode only 46%, all on Quick Sync 22%. The source card shows
+  which path is in use.
+- *Pass through* (a per-source option) sends the sender's H.264 on unchanged,
+  about 3% of a core. It needs H.264 without B-frames, and it is not scaled.
 - The studio page itself needs the full-quality source: it composites the
   programme from it, so a lower-quality copy for the browser would also lower
   every output. The Preview monitor is already drawn at 960 px and 15 fps.
