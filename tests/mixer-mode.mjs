@@ -30,6 +30,16 @@ const h264 = await page.evaluate(() => (RTCRtpReceiver.getCapabilities('video')?
 const skip = (n) => { console.log(`SKIP  ${n}  (this browser has no H.264 decoder)`); };
 const view = (n, fn, ms) => (h264 ? until(fn, ms).then((ok) => check(n, ok)) : skip(n));
 
+// ---- without a mixer: mixer-only sources and outputs say so
+{
+  const sid = await page.evaluate(() => window.studio.sources.add({ name: 'No-mixer SRT', kind: 'srt' }).id);
+  const txt = await page.locator(`.card[data-id="${sid}"]`).innerText();
+  check('Without a mixer, an SRT source card points to the Studio Mixer', /connect to the Studio Mixer/.test(txt) && /Set up the Studio Mixer/.test(txt), txt.slice(0, 120));
+  check('No helper in the top bar or Settings', !/Helper/.test(await page.locator('#topStatus').innerText()) && await page.locator('[data-section="helper"]').count() === 0);
+  check('Top bar flags the missing mixer', /No mixer/.test(await page.locator('#topStatus').innerText()));
+  await page.evaluate((id) => window.studio.sources.remove(id), sid);
+}
+
 // ---- pairing
 await page.evaluate(() => window.studio.ui.showTab('settings', 'mixer'));
 const panel = page.locator('[data-section="mixer"]');

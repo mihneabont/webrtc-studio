@@ -1,7 +1,7 @@
 // Studio bootstrap: creates the engine objects, wires media between them,
 // and mounts the control-room UI.
 import { Store } from './store.js';
-import { SourceManager } from './sources.js';
+import { SourceManager, MIXER_KINDS } from './sources.js';
 import { AudioMixer } from './audio.js';
 import { Scenes } from './scenes.js';
 import { Switcher } from './switcher.js';
@@ -10,7 +10,6 @@ import { OutputManager } from './outputs.js';
 import { Relay } from './relay.js';
 import { MixerLink } from './mixer-link.js';
 import { Emitter, el, $, relayWorksRemotely } from './util.js';
-import { HELPER_SCHEME, HELPER_VERSION } from './ui/helper-install.js';
 import { mountMonitors } from './ui/monitors.js';
 import { mountMultiview } from './ui/multiview.js';
 import { mountMixer } from './ui/mixer.js';
@@ -50,8 +49,8 @@ app.setupRelay = () => {
   app.relay?.close();
   app.relay = null;
   const st = store.ws.settings;
-  // Contributor and receiver links go to other devices. A local helper can't
-  // carry them (it serves OBS and RTMP only), so those use copy-paste codes.
+  // Contributor and receiver links go to other devices. A relay on localhost
+  // can't carry them, so those use copy-paste codes.
   if (!relayWorksRemotely(st.signalingUrl)) {
     let changed = false;
     for (const c of [...store.ws.sources, ...store.ws.outputs]) {
@@ -70,61 +69,6 @@ app.setupRelay = () => {
 };
 app.setupRelay();
 
-// If this page is served by the optional helper, remember its address so the
-// UI can offer it (OBS/WHIP ingest needs it). Nothing is enabled automatically.
-// Otherwise look for one running on this computer (installed from the OBS
-// source card), so the page can be hosted anywhere.
-const HELPER_PORTS = [8788, 8787];
-app.detectHelper = async () => {
-  const bases = [new URL('.', location.href).href.replace(/\/$/, ''), ...HELPER_PORTS.map((p) => `http://localhost:${p}`)];
-  for (const base of bases) {
-    try {
-      const r = await fetch(`${base}/helper`, { cache: 'no-store' });
-      const info = r.ok ? await r.json() : null;
-      if (info?.app === 'webrtc-studio-helper') {
-        const origin = base === bases[0] ? location.origin : base;
-        const changed = origin !== app.helperOrigin || JSON.stringify(info) !== JSON.stringify(app.helperInfo);
-        app.helperOrigin = origin;
-        app.helperInfo = info;
-        app.helperCheckedAt = Date.now();
-        if (changed) app.ui.emit('settings');
-        app.ui.emit('helper');
-        return app.helperOrigin;
-      }
-    } catch { /* not there */ }
-  }
-  app.helperCheckedAt = Date.now();
-  if (app.helperOrigin || app.helperInfo) { app.helperOrigin = null; app.helperInfo = null; app.ui.emit('settings'); }
-  app.ui.emit('helper');
-  return null;
-};
-app.detectHelper();
-// Keep the helper status current (it can be stopped, started or reinstalled
-// while the studio is open). One small local request every few seconds.
-setInterval(() => { if (!document.hidden) app.detectHelper(); }, 5000);
-
-// The Windows installer registers a URL scheme that starts the helper, so the
-// page can turn it back on. Browsers ask before opening it the first time.
-app.startHelper = async () => {
-  const a = el('a', { href: `${HELPER_SCHEME}://start` });
-  document.body.append(a); a.click(); a.remove();
-  for (let i = 0; i < 20; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    if (await app.detectHelper()) return true;
-  }
-  return false;
-};
-app.stopHelper = async () => {
-  const base = app.helperOrigin;
-  if (!base) return;
-  try { await fetch(`${base}/helper/stop`, { method: 'POST' }); } catch { /* it may close the connection as it exits */ }
-  await new Promise((r) => setTimeout(r, 800));
-  await app.detectHelper();
-};
-// RTMP output and SRT input go through the helper: the one found above, or the
-// configured relay.
-outputs.helper = () => app.helperOrigin || store.ws.settings.signalingUrl || null;
-sources.helper = outputs.helper;
 
 // --- UI --------------------------------------------------------------------
 mountMonitors(app, $('#monitors'));
@@ -162,10 +106,14 @@ function renderStatus() {
     `Outputs ${liveOuts.length}/${outs.length}`));
   const mx = app.mixer;
   const ms = mx.active ? mx.status : null;
-  if (mx.cfg.url && mx.cfg.token) {
-    const cls = !mx.cfg.on ? '' : mx.active ? (ms?.engineError ? 'bad' : 'good') : 'bad';
-    pills.push(el('button', { class: `pill pill-btn ${mx.cfg.on && !mx.active ? 'warn' : ''}`, title: 'The Studio Mixer this studio controls. Click for details.', onpointerdown: () => app.ui.showTab?.('settings', 'mixer') },
-      el('span', { class: `dot ${cls}` }), !mx.cfg.on ? 'Mixer paused' : mx.active ? `Mixer${mx.cfg.name ? `: ${mx.cfg.name}` : ''}` : mx.state === 'connecting' ? 'Mixer: connecting…' : 'Mixer unreachable'));
+  {
+    const paired = !!(mx.cfg.url && mx.cfg.token);
+    // Sources and outputs that only the mixer can run, while no mixer is connected.
+    const needs = !mx.active && [...sources.all().filter((s) => MIXER_KINDS.has(s.cfg.kind)), ...outputs.all().filter((o) => o.cfg.kind === 'rtmp' || o.cfg.kind === 'srt')].length;
+    const cls = !paired ? (needs ? 'bad' : '') : !mx.cfg.on ? '' : mx.active ? (ms?.engineError ? 'bad' : 'good') : 'bad';
+    // pointerdown: the bar is redrawn every second, which would swallow a click.
+    pills.push(el('button', { class: `pill pill-btn ${(paired && mx.cfg.on && !mx.active) || needs ? 'warn' : ''}`, title: 'The optional Studio Mixer (SRT, RTMP, OBS, streaming without this tab). Click for details.', onpointerdown: () => app.ui.showTab?.('settings', 'mixer') },
+      el('span', { class: `dot ${cls}` }), !paired ? 'No mixer' : !mx.cfg.on ? 'Mixer paused' : mx.active ? `Mixer${mx.cfg.name ? `: ${mx.cfg.name}` : ''}` : mx.state === 'connecting' ? 'Mixer: connecting…' : 'Mixer unreachable'));
   }
   if (ms) {
     pills.push(el('span', { class: 'pill mono', title: 'Programme on the mixer: size, frame rate, bitrate and encoder' },
@@ -173,15 +121,6 @@ function renderStatus() {
   } else {
     pills.push(el('span', { class: `pill mono ${m.warn && m.late >= 3 ? 'warn' : ''}`, title: 'Programme render rate and time per frame' },
       `${f.width}×${f.height} · ${m.fps ? m.fps.toFixed(0) : '–'}/${f.fps} fps · ${m.renderMs ? m.renderMs.toFixed(1) : '–'} ms`));
-  }
-  if (!mx.active) {
-    const h = app.helperInfo;
-    const old = h && (h.version || 0) < HELPER_VERSION;
-    const usedBy = [...sources.all().filter((s) => s.cfg.kind === 'obs' || s.cfg.kind === 'srt'), ...outputs.all().filter((o) => o.cfg.kind === 'rtmp')].length;
-    const cls = h ? (old ? 'warn' : 'good') : usedBy ? 'bad' : '';
-    // pointerdown: the bar is redrawn every second, which would swallow a click.
-    pills.push(el('button', { class: `pill pill-btn ${h ? (old ? 'warn' : '') : usedBy ? 'warn' : ''}`, title: 'The optional helper on this computer (OBS, SRT, RTMP). Click for details.', onpointerdown: () => app.ui.showTab?.('settings', 'helper') },
-      el('span', { class: `dot ${cls}` }), h ? (old ? 'Helper: update available' : 'Helper on') : 'Helper off'));
   }
   pills.push(el('span', { class: `pill ${audio.ctx.state !== 'running' ? 'warn' : ''}` }, `Audio ${audio.ctx.state === 'running' ? `${audio.ctx.sampleRate / 1000} kHz` : audio.ctx.state}`));
   if (store.ws.settings.signalingUrl) {
