@@ -94,7 +94,7 @@ function mountSourcesTab(app, root) {
   const empty = el('div', { class: 'empty-state' },
     kindIcon(['M3 8a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M16 10l5-3v10l-5-3']),
     el('div', { class: 'empty-title' }, 'Add a source to start'),
-    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, or connect an encoder such as OBS. '
+    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, connect an encoder such as OBS or any camera that supports SRT or WebRTC. '
       + 'Each source then appears here and in the multiview, ready to put on Preview and Programme.'));
   root.append(
     el('div', { class: 'section-title' }, 'Add source'),
