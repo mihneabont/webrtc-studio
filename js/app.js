@@ -33,6 +33,12 @@ sources.on('media', (s) => { compositor.bind(s.id, s.stream); audio.attach(s.id,
 sources.on('removed', (id) => { compositor.bind(id, null); audio.remove(id); updateTally(); });
 
 const updateTally = () => sources.setTally(switcher.pgmSources(), switcher.pvwSources());
+// YouTube players are unmuted only while on air: in Programme, or in a transition into or out of it.
+const updateYouTube = () => {
+  const t = switcher.trans;
+  sources.ytFollow([...switcher.pgmSources(), ...(t ? [...scenes.sourcesIn(t.from), ...scenes.sourcesIn(t.to)] : [])]);
+};
+switcher.on('change', updateYouTube);
 switcher.on('change', updateTally);
 updateTally();
 switcher._syncAudio(0);

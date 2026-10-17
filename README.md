@@ -64,7 +64,10 @@ browser.
    **YouTube** sources take a YouTube link: Connect loads YouTube's own player
    hidden inside the studio, and the studio captures just that player (Element
    Capture), so nothing is downloaded and no browser bar is in the picture. The
-   browser asks once per source to share this tab. Play, pause, seek on the
+   browser asks once to share this tab; any number of YouTube sources share
+   that one capture (each gets a share of the window: about full HD for one,
+   960x540 each for two). A video's sound is on air only while its source is in
+   Programme; cued videos stay silent. Play, pause, seek on the
    progress bar, restart, mute and loop from the source card. Its sound goes to
    the programme only, not to this computer's speakers. Needs Chrome or Edge
    132 or later (not available in Firefox).

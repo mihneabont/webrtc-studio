@@ -2,8 +2,8 @@
 // Player API) inside this page, hidden behind the studio. A page can't read
 // another site's video, so the studio captures this tab restricted to that one
 // player element (Element Capture): the source is exactly the video, with no
-// browser bar or studio around it, and nothing is downloaded. Each source asks
-// once to share "this tab" when it connects (browsers require it).
+// browser bar or studio around it, and nothing is downloaded. All YouTube
+// sources share one capture, so the browser asks to share "this tab" once.
 
 const ID = /^[A-Za-z0-9_-]{11}$/;
 
@@ -74,15 +74,24 @@ function loadApi() {
 }
 
 /**
- * The hidden players. Each player sits in its own box behind an opaque cover,
- * so the operator never sees it, but Element Capture still gets its pixels.
+ * The hidden players. They are tiled in one stage behind an opaque cover, so
+ * the operator never sees them. Chrome allows only one capture of a tab at a
+ * time, so the stage is captured once (Element Capture, one "share this tab"
+ * prompt for all YouTube sources) and each player is cut out of that capture
+ * into its own video stream. The tab's sound is shared too: a player is only
+ * unmuted while its source is on air (setOnAir), so the programme carries the
+ * on-air video's sound and never the cued ones.
  */
 export class YouTubeStage {
-  constructor(onStatus) {
+  constructor(onStatus, onEnded) {
     this.onStatus = onStatus; // (id, status) -> void
-    this.players = new Map(); // id -> { player, box, track, loop, last }
+    this.onEnded = onEnded; // (id) -> void: sharing was stopped
+    this.players = new Map(); // id -> { player, box, canvas, out, loop, last, manualMute, onAir }
     this.root = null;
+    this.shared = null; // { stream, video, audio }
+    this.onAir = new Set();
     setInterval(() => { for (const id of this.players.keys()) this._report(id); }, 500);
+    this.timer = null;
   }
 
   _mount() {
@@ -93,54 +102,121 @@ export class YouTubeStage {
     const cover = document.createElement('div');
     cover.className = 'yt-cover';
     document.body.append(this.root, cover);
+    window.addEventListener('resize', () => this._layout());
+  }
+
+  // Tile the players so that together they fill as much of the window as possible
+  // (a capture can't be bigger than the window); bigger tiles give sharper video.
+  _layout() {
+    const boxes = [...this.players.values()].map((e) => e.box);
+    if (!this.root || !boxes.length) return;
+    const n = boxes.length;
+    const W = window.innerWidth, H = window.innerHeight;
+    let best = null;
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      const w = Math.floor(Math.min(W / cols, (H / rows) * 16 / 9));
+      if (!best || w > best.w) best = { cols, rows, w };
+    }
+    const w = best.w, h = Math.floor(w * 9 / 16);
+    boxes.forEach((b, i) => {
+      Object.assign(b.style, { width: `${w}px`, height: `${h}px`, left: `${(i % best.cols) * w}px`, top: `${Math.floor(i / best.cols) * h}px` });
+      const f = b.querySelector('iframe');
+      if (f) { f.width = w; f.height = h; }
+    });
+    this.root.style.width = `${best.cols * w}px`;
+    this.root.style.height = `${best.rows * h}px`;
+  }
+
+  // One capture of the stage for all players. Must start from a click.
+  _share() {
+    if (this.shared) return Promise.resolve(this.shared);
+    this.sharing ||= navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 } },
+      // The videos' sound goes to the programme only: not played out of this computer.
+      audio: { suppressLocalAudioPlayback: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude', systemAudio: 'exclude', monitorTypeSurfaces: 'exclude',
+    }).then(async (stream) => {
+      const track = stream.getVideoTracks()[0];
+      // Only the stage, nothing else of the page (and not what covers it).
+      await track.restrictTo(await window.RestrictionTarget.fromElement(this.root));
+      // Full size: by default Chrome scales a capture down to about 800 pixels wide.
+      await track.applyConstraints({ resizeMode: 'none', frameRate: 30 }).catch(() => {});
+      const video = Object.assign(document.createElement('video'), { muted: true, playsInline: true, srcObject: stream });
+      video.play().catch(() => {}); // frames arrive by themselves; drawing waits for them
+      this.shared = { stream, video, audio: stream.getAudioTracks()[0] || null };
+      track.addEventListener('ended', () => this._unshare(true));
+      this.timer = setInterval(() => this._draw(), 1000 / 30);
+      return this.shared;
+    }).finally(() => { this.sharing = null; });
+    return this.sharing;
+  }
+
+  _unshare(stoppedByUser = false) {
+    clearInterval(this.timer);
+    this.timer = null;
+    const sh = this.shared;
+    this.shared = null;
+    sh?.stream.getTracks().forEach((t) => t.stop());
+    if (sh) sh.video.srcObject = null;
+    if (stoppedByUser) for (const id of [...this.players.keys()]) { this.close(id); this.onEnded(id); }
+  }
+
+  // Cut each player out of the shared capture.
+  _draw() {
+    const sh = this.shared;
+    const vw = sh?.video.videoWidth, vh = sh?.video.videoHeight;
+    if (!vw || !vh || !this.root.offsetWidth) return;
+    const sx = vw / this.root.offsetWidth, sy = vh / this.root.offsetHeight;
+    for (const e of this.players.values()) {
+      if (!e.canvas) continue;
+      const w = Math.round(e.box.offsetWidth * sx), h = Math.round(e.box.offsetHeight * sy);
+      if (!w || !h) continue;
+      if (e.canvas.width !== w || e.canvas.height !== h) { e.canvas.width = w; e.canvas.height = h; }
+      e.g.drawImage(sh.video, Math.round(e.box.offsetLeft * sx), Math.round(e.box.offsetTop * sy), w, h, 0, 0, w, h);
+    }
   }
 
   /**
-   * Load a video and capture its player. Call from a click (the share prompt
-   * needs one). Resolves to a MediaStream with the player's picture and the
-   * tab's sound.
+   * Load a video and give it its own stream. Call from a click (the first one
+   * asks to share this tab). Resolves to a MediaStream: the video's picture,
+   * plus the shared YouTube sound.
    */
-  async open(id, { videoId, start = 0, loop = false, width = 1280, height = 720, maxWidth = 1920, maxHeight = 1080 }) {
+  async open(id, { videoId, start = 0, loop = false }) {
     this.close(id);
     this._mount();
-    // Ask to share first, while the click still counts; the player loads meanwhile.
-    const capture = navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 30 }, width: { max: maxWidth }, height: { max: maxHeight } },
-      // The video's sound goes to the programme only: not played out of this computer.
-      audio: { suppressLocalAudioPlayback: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude', systemAudio: 'exclude', monitorTypeSurfaces: 'exclude',
-    });
     const box = document.createElement('div');
     box.className = 'yt-box';
-    box.style.width = `${width}px`;
-    box.style.height = `${height}px`;
     const holder = document.createElement('div');
     box.append(holder);
     this.root.append(box);
-    const entry = { player: null, box, stream: null, loop, last: '' };
+    const entry = { player: null, box, canvas: null, g: null, out: null, loop, last: '', manualMute: false };
     this.players.set(id, entry);
-    let stream;
+    this._layout();
     try {
-      [stream] = await Promise.all([capture, this._player(id, entry, holder, videoId, start, width, height)]);
+      // Ask to share first, while the click still counts; the player loads meanwhile.
+      await Promise.all([this._share(), this._player(id, entry, holder, videoId, start)]);
     } catch (e) {
-      capture.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => {});
       this.close(id);
-      throw e.name === 'NotAllowedError' ? new Error('Sharing was not allowed. Click Connect again and choose Allow (the studio captures only the video).') : e;
+      throw e.name === 'NotAllowedError' ? new Error('Sharing was not allowed. Click Connect again and choose Allow (the studio captures only the YouTube videos).') : e;
     }
-    const video = stream.getVideoTracks()[0];
-    // Only the player's box, nothing else of the page (and not what covers it).
-    await video.restrictTo(await window.RestrictionTarget.fromElement(box));
-    entry.stream = stream;
-    return stream;
+    entry.canvas = document.createElement('canvas');
+    entry.g = entry.canvas.getContext('2d', { alpha: false });
+    this._draw();
+    const tracks = [entry.canvas.captureStream(30).getVideoTracks()[0]];
+    if (this.shared.audio) tracks.push(this.shared.audio.clone());
+    entry.out = new MediaStream(tracks);
+    this._applyMute(id);
+    return entry.out;
   }
 
-  _player(id, entry, holder, videoId, start, width, height) {
+  _player(id, entry, holder, videoId, start) {
     return loadApi().then(() => new Promise((resolve, reject) => {
       entry.player = new window.YT.Player(holder, {
-        videoId, width, height, host: 'https://www.youtube.com',
+        videoId, width: entry.box.offsetWidth, height: entry.box.offsetHeight, host: 'https://www.youtube.com',
         playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, modestbranding: 1, playsinline: 1, rel: 0, start: Math.floor(start) },
         events: {
-          onReady: () => { this._report(id, true); resolve(); },
+          onReady: () => { this._applyMute(id); this._report(id, true); resolve(); },
           onStateChange: (e) => {
             if (e.data === 0 && entry.loop) { entry.player.seekTo(0, true); entry.player.playVideo(); }
             this._report(id, true);
@@ -155,6 +231,27 @@ export class YouTubeStage {
     }));
   }
 
+  /**
+   * Which sources are on air (in Programme, or in a transition). Their players
+   * are unmuted; all others are muted. When several are on air at once, only
+   * the first one's audio track carries the (shared) sound, so it isn't doubled.
+   */
+  setOnAir(ids, order = []) {
+    this.onAir = new Set(ids);
+    const carrier = order.find((id) => this.onAir.has(id) && this.players.has(id));
+    for (const [id, e] of this.players) {
+      this._applyMute(id);
+      for (const t of e.out?.getAudioTracks() || []) t.enabled = id === carrier || !this.onAir.has(id);
+    }
+  }
+
+  _applyMute(id) {
+    const e = this.players.get(id);
+    const p = e?.player;
+    if (!p?.mute) return;
+    if (e.manualMute || !this.onAir.has(id)) p.mute(); else p.unMute();
+  }
+
   command(id, cmd, arg) {
     const e = this.players.get(id);
     const p = e?.player;
@@ -164,7 +261,7 @@ export class YouTubeStage {
     else if (cmd === 'restart') { p.seekTo(0, true); p.playVideo(); }
     else if (cmd === 'seek') p.seekTo(Number(arg) || 0, true);
     else if (cmd === 'loop') e.loop = !!arg;
-    else if (cmd === 'mute') (arg ? p.mute() : p.unMute());
+    else if (cmd === 'mute') { e.manualMute = !!arg; this._applyMute(id); }
     this._report(id, true);
   }
 
@@ -172,9 +269,12 @@ export class YouTubeStage {
     const e = this.players.get(id);
     if (!e) return;
     this.players.delete(id);
-    e.stream?.getTracks().forEach((t) => t.stop());
+    e.out?.getTracks().forEach((t) => t.stop());
     try { e.player?.destroy?.(); } catch { /* already gone */ }
     e.box.remove();
+    this._layout();
+    // The last one gone: stop sharing (removes the browser's sharing bar).
+    if (!this.players.size && this.shared) this._unshare();
   }
 
   _report(id, force = false) {
@@ -184,7 +284,8 @@ export class YouTubeStage {
     const st = {
       state: STATES[p.getPlayerState()] || 'unknown',
       time: p.getCurrentTime?.() || 0, duration: p.getDuration?.() || 0,
-      title: p.getVideoData?.()?.title || '', loop: e.loop, muted: !!p.isMuted?.(),
+      title: p.getVideoData?.()?.title || '', loop: e.loop,
+      muted: e.manualMute, onAir: this.onAir.has(id),
     };
     const sig = JSON.stringify({ ...st, time: Math.floor(st.time) });
     if (!force && sig === e.last) return;

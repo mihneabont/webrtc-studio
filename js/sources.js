@@ -64,7 +64,8 @@ export class SourceManager extends Emitter {
     window.addEventListener('pagehide', () => {
       for (const s of this.list.values()) if (s.resourceUrl) httpTeardown(s.resourceUrl, s.token, { keepalive: true });
     });
-    this.ytStage = new YouTubeStage((id, st) => this._ytStatus(id, st));
+    this.ytStage = new YouTubeStage((id, st) => this._ytStatus(id, st), (id) => this._ytEnded(id));
+    this.ytOnAir = new Set(); // sources in Programme (or in a transition), set by the app
   }
 
   get ws() { return this.store.ws; }
@@ -563,28 +564,24 @@ export class SourceManager extends Emitter {
     this.ytStage.close(id);
     s.yt = { status: null, videoId: v.id };
     const gen = s.gen;
-    this._set(s, 'connecting', 'Loading the video. If the browser asks to share this tab, choose Allow: the studio captures only the video.');
+    this._set(s, 'connecting', 'Loading the video. If the browser asks to share this tab, choose Allow: the studio captures only the YouTube videos.');
     let stream;
     try {
-      stream = await this.ytStage.open(id, { videoId: v.id, start: v.start, loop: !!s.cfg.ytLoop, ...this._ytSize() });
+      stream = await this.ytStage.open(id, { videoId: v.id, start: v.start, loop: !!s.cfg.ytLoop });
     } catch (e) {
       if (s.gen === gen) { s.yt = null; this._set(s, 'failed', e.message); }
       return null;
     }
     if (s.gen !== gen) { stream.getTracks().forEach((t) => t.stop()); return null; }
     this._ytStream(s, stream);
+    this.ytFollow(this.ytOnAir);
     return stream;
   }
 
-  // The player's size on the page decides the captured resolution: as close to the
-  // programme as possible, but inside the window (a capture can't be bigger than it).
-  _ytSize() {
-    const f = this.ws.settings.format || { width: 1920, height: 1080 };
-    const scale = window.devicePixelRatio || 1;
-    let width = Math.min(f.width / scale, window.innerWidth);
-    let height = width * 9 / 16;
-    if (height > window.innerHeight) { height = window.innerHeight; width = height * 16 / 9; }
-    return { width: Math.floor(width), height: Math.floor(height), maxWidth: f.width, maxHeight: f.height };
+  /** The sources now on air: YouTube players follow (unmuted only while on air). */
+  ytFollow(ids) {
+    this.ytOnAir = new Set(ids);
+    this.ytStage.setOnAir(this.ytOnAir, this.ws.sources.map((c) => c.id));
   }
 
   ytCommand(id, cmd, arg) {
@@ -599,19 +596,19 @@ export class SourceManager extends Emitter {
     s.hasVideo = stream.getVideoTracks().length > 0;
     s.hasAudio = stream.getAudioTracks().length > 0;
     s.videoFlowing = s.hasVideo; s.audioFlowing = s.hasAudio;
-    for (const t of stream.getTracks()) {
-      t.addEventListener('ended', () => {
-        // "Stop sharing" in the browser's bar ends the capture.
-        if (s.gen !== gen) return;
-        this.ytStage.close(s.id);
-        s.yt = null;
-        s.stream = null; s.hasVideo = s.hasAudio = s.videoFlowing = s.audioFlowing = false;
-        this.emit('media', s);
-        this._set(s, 'ended', 'Sharing stopped. Click Connect to load the video again.');
-      });
-    }
+    s.ytGen = gen;
     this.emit('media', s);
-    this._set(s, 'live', s.hasAudio ? 'YouTube video ready. Play it from here; its sound goes to the programme only.' : 'YouTube video ready, without sound (the browser didn\'t share the tab\'s audio).');
+    this._set(s, 'live', s.hasAudio ? 'YouTube video ready. Play it from here; its sound goes to the programme only, while it is on air.' : 'YouTube video ready, without sound (the browser didn\'t share the tab\'s audio).');
+  }
+
+  // "Stop sharing" in the browser's bar ends every YouTube source.
+  _ytEnded(id) {
+    const s = this.list.get(id);
+    if (!s || s.gen !== s.ytGen) return;
+    s.yt = null;
+    s.stream = null; s.hasVideo = s.hasAudio = s.videoFlowing = s.audioFlowing = false;
+    this.emit('media', s);
+    this._set(s, 'ended', 'Sharing stopped. Click Connect to load the video again.');
   }
 
   _ytStatus(id, st) {
@@ -621,7 +618,7 @@ export class SourceManager extends Emitter {
     if (!s.yt) return;
     const before = s.yt.status;
     s.yt.status = st;
-    if (!before || before.state !== st.state || before.title !== st.title || before.loop !== st.loop || before.muted !== st.muted || !before.duration !== !st.duration) this.emit('change', s);
+    if (!before || before.state !== st.state || before.title !== st.title || before.loop !== st.loop || before.muted !== st.muted || before.onAir !== st.onAir || !before.duration !== !st.duration) this.emit('change', s);
     this.emit('yt', s);
   }
 

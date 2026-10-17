@@ -288,6 +288,7 @@ function mountSourcesTab(app, root) {
     if (!youTubeSupported()) out.push(el('div', { class: 'note warn' }, 'YouTube sources aren\'t available in this browser. Open the studio in Chrome or Edge (version 132 or later) to use them.'));
     if (!s.stream || !st) return out;
     if (st.title) out.push(el('div', { class: 'yt-title', title: st.title }, st.title));
+    out.push(el('div', { class: 'small muted' }, st.muted ? 'Sound: muted' : st.onAir ? 'Sound: on air' : 'Sound: silent until it is on Programme'));
     // Progress bar: drag to seek; it follows playback while you are not dragging it.
     const bar = el('input', { type: 'range', class: 'yt-bar', min: 0, max: Math.max(1, Math.floor(st.duration)), step: 1, value: Math.floor(st.time), dataset: { sid: s.id }, 'aria-label': 'Playback position' });
     bar.addEventListener('input', () => { bar.dataset.dragging = '1'; time.textContent = `${fmtClock(Number(bar.value))} / ${fmtClock(st.duration)}`; });
@@ -298,7 +299,7 @@ function mountSourcesTab(app, root) {
       el('div', { class: 'btn-row' },
         el('button', { class: `btn ${playing ? '' : 'primary'}`, onclick: () => sources.ytCommand(s.id, playing ? 'pause' : 'play') }, playing ? 'Pause' : 'Play'),
         el('button', { class: 'btn', title: 'Back to the start and play', onclick: () => sources.ytCommand(s.id, 'restart') }, 'Restart'),
-        el('button', { class: `btn ${st.muted ? 'on' : ''}`, title: 'Silence this video in the programme', onclick: () => sources.ytCommand(s.id, 'mute', !st.muted) }, st.muted ? 'Unmute' : 'Mute'),
+        el('button', { class: `btn ${st.muted ? 'on' : ''}`, title: 'Keep this video silent, even on air', onclick: () => sources.ytCommand(s.id, 'mute', !st.muted) }, st.muted ? 'Unmute' : 'Mute'),
         check('Loop', !!s.cfg.ytLoop, (v) => sources.ytCommand(s.id, 'loop', v))),
       el('div', { class: 'btn-row' }, el('button', { class: 'btn sm', onclick: () => sources.disconnect(s.id) }, 'Disconnect')));
     return out;
