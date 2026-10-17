@@ -28,6 +28,10 @@ log = logging.getLogger(__name__)
 SOURCE_PREFIX = "in/"
 
 
+def _is_video(track: dict) -> bool:
+    return "width" in (track.get("codecProps") or {}) or track.get("codec") in ("VP8", "VP9", "AV1", "H264", "H265")
+
+
 def source_path(source_id: str) -> str:
     return f"{SOURCE_PREFIX}{source_id}"
 
@@ -155,6 +159,14 @@ class MediaMTX:
         with urllib.request.urlopen(req, timeout=2) as r:
             return json.loads(r.read())
 
+    def has_video(self, path: str) -> bool:
+        """Whether a path is being published with a video track."""
+        try:
+            p = self._get(f"/v3/paths/get/{path}")
+        except Exception:
+            return False
+        return bool(p.get("ready")) and any(_is_video(t) for t in p.get("tracks2") or [])
+
     def source_stats(self) -> dict[str, dict]:
         """Who is publishing to each in/<id> path, how, and how well."""
         try:
@@ -179,7 +191,7 @@ class MediaMTX:
                 src.get("type"), src.get("type"))}
             for track in p.get("tracks2") or []:
                 props = track.get("codecProps") or {}
-                if "width" in props or track.get("codec") in ("VP8", "VP9", "AV1", "H264", "H265"):
+                if _is_video(track):
                     stats.update(video_codec=track.get("codec"), width=props.get("width"), height=props.get("height"))
                 else:
                     stats["audio_codec"] = track.get("codec")

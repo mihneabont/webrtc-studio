@@ -21,15 +21,20 @@ from .program import Program  # noqa: E402
 
 log = logging.getLogger(__name__)
 
+STALL_SECONDS = 6
+
 
 class Engine:
-    def __init__(self, make_program: Callable[[Format, Encoder], Program], prefer_encoder: str | None = None) -> None:
+    def __init__(self, make_program: Callable[[Format, Encoder], Program], prefer_encoder: str | None = None,
+                 on_rebuilt: Callable[[Program], None] | None = None) -> None:
         self.make_program = make_program
+        self.on_rebuilt = on_rebuilt
         self.prefer_encoder = prefer_encoder
         self.loop: GLib.MainLoop | None = None
         self.program: Program | None = None
         self.encoder: Encoder | None = None
         self.error: str | None = None
+        self.skip: set[str] = set()  # encoders that stalled
         self._thread: threading.Thread | None = None
 
     def start(self, fmt: Format) -> None:
@@ -39,6 +44,7 @@ class Engine:
         def run() -> None:
             self.loop = GLib.MainLoop()
             GLib.idle_add(self._start_program, fmt, ready)
+            GLib.timeout_add(1000, self._watch_encoder)
             self.loop.run()
 
         self._thread = threading.Thread(target=run, name="engine", daemon=True)
@@ -58,6 +64,28 @@ class Engine:
             self.program = None
         ready.set()
         return False
+
+    def _watch_encoder(self) -> bool:
+        # A hardware encoder can pass the short start-up test and still output nothing in the full
+        # pipeline (two encoders at once, longer runs). Then the programme and the preview have no
+        # video, so switch to the next encoder that works.
+        p = self.program
+        if p is not None and p.enc_stalled >= STALL_SECONDS and self.encoder and self.encoder.name != "x264enc":
+            bad = self.encoder.name
+            self.skip.add(bad)
+            try:
+                self.encoder = pick_encoder(None, skip=self.skip)
+            except RuntimeError as exc:
+                self.error = str(exc)
+                return True
+            log.error("%s took frames for %d s but encoded none; switching to %s", bad, p.enc_stalled, self.encoder.name)
+            fmt = p.fmt
+            p.stop()
+            self.program = None
+            self._start_program(fmt, threading.Event())
+            if self.program is not None and self.on_rebuilt:
+                self.on_rebuilt(self.program)
+        return True
 
     def call(self, fn: Callable[[Program], object]) -> None:
         """Run fn(program) on the engine thread."""

@@ -117,11 +117,11 @@ def _works(enc: Encoder) -> bool:
     return ok
 
 
-def pick_encoder(prefer: str | None = None) -> Encoder:
+def pick_encoder(prefer: str | None = None, skip: set[str] | None = None) -> Encoder:
     """The first encoder that really encodes on this machine (hardware first)."""
-    order = CANDIDATES
+    order = [e for e in CANDIDATES if e.name not in (skip or ())]
     if prefer:
-        order = [e for e in CANDIDATES if e.name == prefer] + [e for e in CANDIDATES if e.name != prefer]
+        order = [e for e in order if e.name == prefer] + [e for e in order if e.name != prefer]
     for enc in order:
         if _works(enc):
             log.info("video encoder: %s", enc.name)
