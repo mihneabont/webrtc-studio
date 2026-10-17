@@ -61,6 +61,8 @@ export function mountOutputsTab(app, root, setBadge) {
 
   const cards = new CardList(list, (o) => {
     const remote = outputs.remoteKind(o);
+    // The mixer keeps the key it was given, so another browser can start the output without it.
+    const keyOnMixer = remote && !o.token && app.mixer.status?.outputs?.[o.id]?.hasKey;
     const live = remote ? ['connecting', 'live', 'unstable'].includes(o.state) : !!o.pc;
     const kindLabel = remote ? `${{ twitch: 'Twitch', whip: 'WHIP', rtmp: 'RTMP', srt: 'SRT' }[o.cfg.kind]} from the mixer`
       : o.cfg.kind === 'srt' ? 'SRT (needs the mixer)'
@@ -125,7 +127,7 @@ export function mountOutputsTab(app, root, setBadge) {
     if (o.cfg.kind === 'rtmp') {
       if (!remote) parts.push(needsMixer('A web page can\'t send RTMP (YouTube, Twitch, Facebook and most platforms). The Studio Mixer sends it for you.'));
       const url = text(o.cfg.url, (v) => outputs.update(o.id, { url: v.trim() }, { silent: true }), { placeholder: 'rtmp://live.twitch.tv/app' });
-      const keyIn = el('input', { type: 'password', value: o.token || '', placeholder: 'Stream key', autocomplete: 'off' });
+      const keyIn = el('input', { type: 'password', value: o.token || '', placeholder: keyOnMixer ? 'Saved on the mixer' : 'Stream key', autocomplete: 'off' });
       keyIn.addEventListener('change', () => { o.token = keyIn.value.trim(); });
       parts.push(field('Server URL', url, 'From the platform\'s stream settings, e.g. rtmp://a.rtmp.youtube.com/live2 or rtmp://live.twitch.tv/app. rtmps:// works too.'),
         field('Stream key', keyIn), secretControls(o, keyIn));
@@ -155,7 +157,7 @@ export function mountOutputsTab(app, root, setBadge) {
       if (probs.length) parts.push(el('div', { class: 'note warn' }, probs.join(' ')));
     }
     const url = text(o.cfg.url, (v) => outputs.update(o.id, { url: v.trim() }, { silent: true }), { type: 'url', placeholder: 'https://ingest.example.com/whip/…' });
-    const keyIn = el('input', { type: 'password', value: o.token || '', placeholder: twitch ? 'Twitch stream key (live_…)' : 'Bearer token (optional)', autocomplete: 'off' });
+    const keyIn = el('input', { type: 'password', value: o.token || '', placeholder: keyOnMixer ? 'Saved on the mixer' : twitch ? 'Twitch stream key (live_…)' : 'Bearer token (optional)', autocomplete: 'off' });
     keyIn.addEventListener('change', () => { o.token = keyIn.value.trim(); });
     parts.push(twitch && remote ? null : field(twitch ? 'Ingest URL' : 'WHIP URL', url), field(twitch ? 'Stream key' : 'Bearer token', keyIn));
     parts.push(secretControls(o, keyIn));

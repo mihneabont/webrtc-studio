@@ -118,7 +118,7 @@ class Output:
 
     def snapshot(self) -> dict:
         return {"state": self.state, "error": self.error, "kbps": round(self.kbps),
-                "live_since": self.live_since, "restarts": self.restarts}
+                "live_since": self.live_since, "restarts": self.restarts, "hasKey": bool(self.cfg.get("key"))}
 
     # ------------------------------------------------------------- process
 

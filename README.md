@@ -40,7 +40,12 @@ downloads a setup file that installs Python, GStreamer, MediaMTX and ffmpeg as
 needed, starts the mixer on port 8788 (and at every sign-in), and removes the
 older helper if it is still installed. Then **Connect to it**. A mixer on another computer is paired with
 its address and the code shown on its own page (`http://<mixer>:8788`). Without a
-mixer, everything runs in the browser as before. Details: `mixer/studio_mixer/server.py`.
+mixer, everything runs in the browser as before.
+
+The show (sources and their sender keys, scenes, graphics, outputs, audio and
+format) is stored on the mixer, so any browser paired with it opens the same
+show, and edits in one browser are offered to the others. The mixer also keeps
+output stream keys, so another browser can start an output without them. Details: `mixer/studio_mixer/server.py`.
 
 Use a current Chrome or Edge for the studio (H.264 encoding is needed for
 Twitch). Contributors and receivers can use any current desktop or mobile
@@ -148,6 +153,7 @@ node tests/four-sources.mjs # load check with four 1080p contributors
 cd mixer && python3 -m studio_mixer --data /tmp/mixdata &
 python3 mixer/tests/api_check.py --data /tmp/mixdata   # mixer API, ingest, switching, outputs (12 checks)
 MIXER_DATA=/tmp/mixdata node tests/mixer-mode.mjs      # the page in mixer mode (static server on :8080)
+MIXER_DATA=/tmp/mixdata node tests/mixer-show.mjs      # two browsers share the show stored on the mixer
 ```
 
 Set `PLAYWRIGHT_DIR` to the folder containing the `playwright` package if it
