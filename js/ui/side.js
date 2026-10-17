@@ -245,7 +245,7 @@ function mountSourcesTab(app, root) {
     const status = !listening ? 'Not listening.'
       : !st ? 'Starting…'
         : st.state === 'error' ? 'The helper could not listen on this port.'
-          : `${st.state === 'listening' ? `Listening on UDP port ${st.port}` : 'Receiving'}${st.input?.video ? ` · input ${st.input.video}${st.input.audio ? ` + ${st.input.audio.toUpperCase()}` : ''}` : ''}`;
+          : `${st.state === 'listening' ? `Listening on UDP port ${st.port}` : 'Receiving'}${st.input?.video ? ` · input ${st.input.video}${st.input.audio ? ` + ${st.input.audio.toUpperCase()}` : ''}` : ''}${st.encoder ? ` · converted with ${st.encoder}, up to ${st.height}p` : ''}`;
     return [
       el('div', { class: 'small muted' }, 'In the SRT sender (Larix, vMix, OBS, a hardware encoder) choose mode Caller and enter:'),
       lan ? field('Address from a phone or another computer', linkBox(`srt://${lan}:${s.cfg.srtPort}`, 'Copy')) : null,
@@ -253,7 +253,7 @@ function mountSourcesTab(app, root) {
       el('div', { class: 'btn-row' }, field('Port (UDP)', port), field('Latency (ms)', latency)),
       field('Passphrase', pass, 'If you set one, enter the same passphrase in the sender.'),
       el('div', { class: 'small muted' },
-        `Use the same latency in the sender (${s.cfg.srtLatency} ms). Any video codec works (H.264, HEVC): the helper re-encodes to H.264 for the studio, which uses some CPU. `,
+        `Use the same latency in the sender (${s.cfg.srtLatency} ms). Any video codec works (H.264, HEVC): the helper converts it to H.264 for the studio, on the graphics chip when it can, and never above the programme resolution. `,
         `From outside your network, forward UDP port ${s.cfg.srtPort} on your router to this computer.`),
       el('div', { class: `card-detail ${st?.state === 'error' ? 'bad' : ''}` }, status),
       el('div', { class: 'btn-row' },

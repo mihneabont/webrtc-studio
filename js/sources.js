@@ -484,7 +484,7 @@ export class SourceManager extends Emitter {
     let r, info;
     try {
       r = await fetch(`${base}/srt`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room: this.ws.settings.room, slot: s.id, token: s.cfg.token, port: s.cfg.srtPort, latency: s.cfg.srtLatency, passphrase: s.cfg.srtPass || '', kbps: s.cfg.srtKbps }) });
+        body: JSON.stringify({ room: this.ws.settings.room, slot: s.id, token: s.cfg.token, port: s.cfg.srtPort, latency: s.cfg.srtLatency, passphrase: s.cfg.srtPass || '', kbps: s.cfg.srtKbps, height: this.ws.settings.format.height }) });
       info = await r.json().catch(() => ({}));
     } catch {
       this._set(s, 'failed', `Can't reach the helper at ${base}. Is it running?`);

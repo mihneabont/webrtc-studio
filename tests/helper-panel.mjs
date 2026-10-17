@@ -24,7 +24,7 @@ check('Panel says not running and offers Turn on + Install', /Not running/.test(
 let h = startHelper();
 check('Panel notices the helper starting (polling)', await until(async () => /Helper: Running/.test(await panel.innerText())));
 const txt = await panel.innerText();
-check('Panel shows address, version and features', /localhost:8788/.test(txt) && /version\s*4/.test(txt) && /OBS \/ WHIP input/.test(txt), txt.replace(/\s+/g, ' ').slice(0, 200));
+check('Panel shows address, version and features', /localhost:8788/.test(txt) && /version\s*5/.test(txt) && /OBS \/ WHIP input/.test(txt), txt.replace(/\s+/g, ' ').slice(0, 200));
 check('Top bar shows Helper on', await until(async () => (await pill.innerText()).includes('Helper on'), 3000));
 check('Running panel offers Turn off and Reinstall', await panel.locator('button', { hasText: 'Turn off' }).count() === 1 && await panel.locator('button', { hasText: 'Reinstall helper' }).count() === 1);
 

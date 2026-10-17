@@ -5,7 +5,7 @@ import { el } from '../util.js';
 export const HELPER_PORT = 8788;
 // The helper version this page expects (HELPER_VERSION in server.mjs). An older
 // helper still works for what it supports; the page offers an update.
-export const HELPER_VERSION = 4;
+export const HELPER_VERSION = 5;
 // URL scheme the installer registers so the page can start the helper.
 export const HELPER_SCHEME = 'webrtc-studio-helper';
 

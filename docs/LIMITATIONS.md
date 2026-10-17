@@ -117,9 +117,16 @@ ffmpeg exits and the helper listens again, so the sender can reconnect at any
 time.
 
 - Any codec the sender uses works (H.264, HEVC, AAC...), because ffmpeg always
-  re-encodes. That costs CPU on the studio computer (roughly one core for
-  1080p30 with x264 `veryfast`) and adds about 0.5 to 1 s of delay on top of
-  the SRT latency.
+  re-encodes, adding about 0.5 to 1 s of delay on top of the SRT latency. To
+  keep that cheap, ffmpeg decodes on the GPU when it can (`-hwaccel auto`),
+  encodes with the first hardware H.264 encoder that passes a test encode
+  (NVENC, Intel Quick Sync, AMD AMF; x264 `veryfast` otherwise, roughly one
+  core for 1080p30), and scales the source down to the programme height
+  first, so a 1080p sender into a 720p programme costs about half. The source
+  card shows which encoder is in use. The hardware paths are untested.
+- The studio page itself needs the full-quality source: it composites the
+  programme from it, so a lower-quality copy for the browser would also lower
+  every output. The Preview monitor is already drawn at 960 px and 15 fps.
 - ffmpeg's WHIP muxer stops answering ICE connectivity checks once connected,
   and Chrome drops such a connection after about 30 s. The helper therefore
   puts a small UDP relay between ffmpeg and the browser that forwards the
