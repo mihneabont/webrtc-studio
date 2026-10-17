@@ -1,0 +1,3 @@
+# GStreamer itself: on Windows from PyPI (pip install gstreamer-bundle==1.28.7, see install script);
+# on Linux from the system (apt install gstreamer1.0-plugins-{base,good,bad,ugly} gstreamer1.0-libav python3-gi).
+aiohttp>=3.9

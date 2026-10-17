@@ -8,6 +8,7 @@ import { Switcher } from './switcher.js';
 import { Compositor } from './compositor.js';
 import { OutputManager } from './outputs.js';
 import { Relay } from './relay.js';
+import { MixerLink } from './mixer-link.js';
 import { Emitter, el, $, relayWorksRemotely } from './util.js';
 import { HELPER_SCHEME, HELPER_VERSION } from './ui/helper-install.js';
 import { mountMonitors } from './ui/monitors.js';
@@ -26,10 +27,17 @@ const outputs = new OutputManager(store, compositor, audio);
 const app = { store, sources, audio, scenes, switcher, compositor, outputs, relay: null, ui: new Emitter() };
 window.studio = app; // handy for debugging and automated tests
 
+// Optional Studio Mixer: when connected, it mixes and streams; this page is the control room.
+app.mixer = new MixerLink(app);
+{
+  const save = store.save;
+  store.save = () => { save(); app.mixer.scheduleSync(); };
+}
+
 // --- media wiring ----------------------------------------------------------
 for (const s of sources.all()) audio._ensure(s.id);
 sources.on('added', (s) => audio._ensure(s.id));
-sources.on('media', (s) => { compositor.bind(s.id, s.stream); audio.attach(s.id, s.stream); });
+sources.on('media', (s) => { compositor.bind(s.id, s.stream); audio.attach(s.id, s.stream); app.mixer.sourceMedia(s); });
 sources.on('removed', (id) => { compositor.bind(id, null); audio.remove(id); updateTally(); });
 
 const updateTally = () => sources.setTally(switcher.pgmSources(), switcher.pvwSources());
@@ -123,6 +131,7 @@ mountMonitors(app, $('#monitors'));
 mountMultiview(app, $('#multiview'));
 mountMixer(app, $('#mixer'));
 mountSide(app, $('#side'));
+app.mixer.connect();
 
 const saveState = $('#saveState');
 store.onSaved = (err) => {
@@ -151,9 +160,21 @@ function renderStatus() {
     `Inputs ${srcs.filter((s) => s.state === 'live').length}/${srcs.length}`));
   pills.push(el('span', { class: 'pill' }, el('span', { class: `dot ${outs.some((o) => o.state === 'failed') ? 'bad' : liveOuts.length ? 'good' : ''}` }),
     `Outputs ${liveOuts.length}/${outs.length}`));
-  pills.push(el('span', { class: `pill mono ${m.warn && m.late >= 3 ? 'warn' : ''}`, title: 'Programme render rate and time per frame' },
-    `${f.width}×${f.height} · ${m.fps ? m.fps.toFixed(0) : '–'}/${f.fps} fps · ${m.renderMs ? m.renderMs.toFixed(1) : '–'} ms`));
-  {
+  const mx = app.mixer;
+  const ms = mx.active ? mx.status : null;
+  if (mx.cfg.url && mx.cfg.token) {
+    const cls = !mx.cfg.on ? '' : mx.active ? (ms?.engineError ? 'bad' : 'good') : 'bad';
+    pills.push(el('button', { class: `pill pill-btn ${mx.cfg.on && !mx.active ? 'warn' : ''}`, title: 'The Studio Mixer this studio controls. Click for details.', onpointerdown: () => app.ui.showTab?.('settings', 'mixer') },
+      el('span', { class: `dot ${cls}` }), !mx.cfg.on ? 'Mixer paused' : mx.active ? `Mixer${mx.cfg.name ? `: ${mx.cfg.name}` : ''}` : mx.state === 'connecting' ? 'Mixer: connecting…' : 'Mixer unreachable'));
+  }
+  if (ms) {
+    pills.push(el('span', { class: 'pill mono', title: 'Programme on the mixer: size, frame rate, bitrate and encoder' },
+      `${ms.format.width}×${ms.format.height} · ${ms.fps ?? '–'}/${ms.format.fps} fps · ${ms.kbps} kb/s · ${ms.encoder}`));
+  } else {
+    pills.push(el('span', { class: `pill mono ${m.warn && m.late >= 3 ? 'warn' : ''}`, title: 'Programme render rate and time per frame' },
+      `${f.width}×${f.height} · ${m.fps ? m.fps.toFixed(0) : '–'}/${f.fps} fps · ${m.renderMs ? m.renderMs.toFixed(1) : '–'} ms`));
+  }
+  if (!mx.active) {
     const h = app.helperInfo;
     const old = h && (h.version || 0) < HELPER_VERSION;
     const usedBy = [...sources.all().filter((s) => s.cfg.kind === 'obs' || s.cfg.kind === 'srt'), ...outputs.all().filter((o) => o.cfg.kind === 'rtmp')].length;
@@ -172,7 +193,9 @@ function renderStatus() {
   const alerts = [];
   if (!window.isSecureContext) alerts.push(['bad', 'This page is not served over HTTPS (or localhost). Browsers disable WebRTC media features on insecure origins.']);
   if (audio.ctx.state !== 'running') alerts.push(['warn', 'Audio engine is paused by the browser until you interact with the page. Programme audio is silent until then.', 'Start audio', () => audio.ctx.resume()]);
-  if (m.warn) alerts.push(['warn', m.warn]);
+  if (m.warn && !mx.active) alerts.push(['warn', m.warn]);
+  if (mx.cfg.on && mx.cfg.token && mx.state === 'error') alerts.push(['warn', `Studio Mixer: ${mx.error} Until it is back, the studio runs in this browser.`]);
+  if (ms?.engineError) alerts.push(['bad', `The Studio Mixer could not start its mixing engine: ${ms.engineError}`]);
   const hw = hardwareWarning(srcs);
   if (hw) alerts.push(['warn', hw]);
   for (const o of liveOuts) {

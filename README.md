@@ -43,6 +43,22 @@ any codec the sender uses works. See docs/LIMITATIONS.md.
 Locally, without hosting: `node signaling-server/server.mjs --static . --port 8787`
 serves the app and the helper together.
 
+### Optional: Studio Mixer
+
+The Studio Mixer (`mixer/`) moves mixing, encoding and sending off the browser,
+to this computer or any other one. It takes SRT, RTMP and WHIP senders directly,
+sends RTMP, SRT, WHIP and Twitch outputs, and keeps streaming with the tab closed.
+The page stays the control room with the same screens: it sends the workspace,
+commands and graphics (drawn by the page as PNGs), and gets back one 720p
+"multiview" stream that it cuts into the Preview, Programme and source monitors.
+
+Settings → Studio Mixer → **Install the mixer on this computer (Windows)**
+downloads a setup file that installs Python, GStreamer, MediaMTX and ffmpeg as
+needed, starts the mixer on port 8788 (and at every sign-in), and replaces the
+older helper. Then **Connect to it**. A mixer on another computer is paired with
+its address and the code shown on its own page (`http://<mixer>:8788`). Without a
+mixer, everything runs in the browser as before. Details: `mixer/studio_mixer/server.py`.
+
 Use a current Chrome or Edge for the studio (H.264 encoding is needed for
 Twitch). Contributors and receivers can use any current desktop or mobile
 browser.
@@ -135,6 +151,9 @@ you reconnect them.
 | `js/store.js` | Persistence (localStorage, IndexedDB for images, optional encrypted stream keys) |
 | `js/ui/*` | Control-room UI |
 | `signaling-server/server.mjs` | Optional helper (relay, OBS/WHIP ingest, SRT input, RTMP output); not needed for the rest of the app |
+| `js/mixer-link.js` | Mixer mode: workspace sync, commands, graphics upload, WHIP forwarding, multiview monitors |
+| `mixer/studio_mixer/` | Optional Studio Mixer: GStreamer engine, MediaMTX ingest, ffmpeg outputs, control API |
+| `mixer/windows/` | Mixer installer for Windows (run by the page's setup file) |
 
 ## Tests
 
@@ -150,6 +169,11 @@ node tests/four-sources.mjs # load check with four 1080p contributors
 node tests/obs.mjs          # OBS/WHIP encoder ingest via the helper (8 checks)
 node tests/rtmp.mjs         # RTMP output via the helper's ffmpeg (needs ffmpeg; 9 checks)
 node tests/helper-panel.mjs # helper status, turn off/on, update notice (static server on :8080; 13 checks)
+
+# Studio Mixer (Linux: apt install gstreamer1.0-plugins-{base,good,bad,ugly} gstreamer1.0-libav python3-gi, plus mediamtx on PATH)
+cd mixer && python3 -m studio_mixer --data /tmp/mixdata &
+python3 mixer/tests/api_check.py --data /tmp/mixdata   # mixer API, ingest, switching, outputs (12 checks)
+MIXER_DATA=/tmp/mixdata node tests/mixer-mode.mjs      # the page in mixer mode (static server on :8080)
 ```
 
 Set `PLAYWRIGHT_DIR` to the folder containing the `playwright` package if it

@@ -25,6 +25,7 @@ export const SOURCE_STATES = {
 export function stateLabel(s) {
   if (s.cfg.kind === 'obs' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for encoder';
   if (s.cfg.kind === 'srt' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for SRT sender';
+  if (s.cfg.kind === 'rtmp' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for RTMP sender';
   return SOURCE_STATES[s.state] || s.state;
 }
 
@@ -56,6 +57,7 @@ export class SourceManager extends Emitter {
     super();
     this.store = store;
     this.relay = null;
+    this.remote = null; // MixerLink in mixer mode: OBS, SRT and RTMP senders connect to the mixer instead
     this.list = new Map(); // id -> runtime
     for (const cfg of store.ws.sources) this._makeRuntime(cfg);
     this._statsTimer = setInterval(() => this._sampleAll(), 1000);
@@ -312,6 +314,7 @@ export class SourceManager extends Emitter {
   async _onIngest(m) {
     const reply = (msg) => this._relaySend('ingest', { gen: m.gen, ...msg });
     const s = this.list.get(m.slot);
+    if (this.remote && m.type !== 'whip-bye') return reply({ type: 'reject', status: 409, reason: 'This studio uses the Studio Mixer. Send to the mixer address shown on the source card.' });
     if (m.type === 'whip-bye') {
       if (s && s.whipGen === m.gen) {
         this._teardown(s, 'bye');
@@ -431,6 +434,7 @@ export class SourceManager extends Emitter {
     const s = this.list.get(id);
     if (!s) return null;
     s.retries = 0;
+    if (this.remote && ['obs', 'srt', 'rtmp'].includes(s.cfg.kind)) return null; // senders connect to the mixer
     if (s.cfg.kind === 'whep') return this.connectWhep(id);
     if (s.cfg.kind === 'srt') return this.startSrt(id);
     if (s.cfg.kind === 'obs') {
@@ -482,6 +486,7 @@ export class SourceManager extends Emitter {
   async startSrt(id) {
     const s = this.list.get(id);
     if (!s || s.cfg.kind !== 'srt') return null;
+    if (this.remote) return null; // the mixer listens for SRT itself
     const base = this.helper();
     if (!base || !this.relay) { this._set(s, 'failed', 'SRT input needs the helper running on this computer.'); return null; }
     this.stopSrt(s);
