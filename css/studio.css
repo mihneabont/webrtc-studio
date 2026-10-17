@@ -266,3 +266,12 @@ details[open] summary { margin-bottom: 6px; }
 .add-source .btn-row input { flex: 1; min-width: 0; }
 .kind-btn svg { flex: none; }
 .kind-btn span { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- empty list placeholder ---------- */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 18px; text-align: center;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--muted); font-size: 12px; line-height: 1.45;
+}
+.empty-state[hidden] { display: none; }
+.empty-state svg { width: 32px; height: 32px; color: var(--faint); }
+.empty-state .empty-title { color: var(--text); font-weight: 600; font-size: 13px; }
