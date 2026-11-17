@@ -16,6 +16,7 @@ export function defaultWorkspace() {
       defaultFit: 'cover',
       swapOnTake: true,
       sendTally: true,
+      mailboxUrl: '', // empty: the mailbox built into the app (js/mailbox.js)
     },
     multiview: { layout: 4, page: 0 },
     sources: [],
@@ -42,12 +43,12 @@ function merge(def, saved) {
 }
 
 // Older workspaces could hold sources, outputs and settings that needed a
-// local helper or a signaling relay. Those are gone: drop them, and use
-// copy-paste codes for invite links and receivers.
+// local helper or the old signaling relay. Those are gone: drop them, and use
+// copy-paste codes for links that used the relay.
 function migrate(ws) {
   ws.sources = (ws.sources || []).filter((c) => c && c.kind !== 'obs' && c.kind !== 'srt');
   ws.outputs = (ws.outputs || []).filter((c) => c && c.kind !== 'rtmp');
-  for (const c of [...ws.sources, ...ws.outputs]) if ((c.kind || 'peer') === 'peer') c.mode = 'manual';
+  for (const c of [...ws.sources, ...ws.outputs]) if ((c.kind || 'peer') === 'peer' && c.mode === 'relay') c.mode = 'manual';
   const ids = new Set(ws.sources.map((c) => c.id));
   for (const id of Object.keys(ws.audio?.channels || {})) if (!ids.has(id)) delete ws.audio.channels[id];
   for (const k of ['signalingUrl', 'room', 'whipProxy']) delete ws.settings[k];

@@ -1,0 +1,21 @@
+# Cloudflare Worker that lets WHIP encoders reach the studio page.
+# Deployed by .github/workflows/mailbox.yml; see mailbox/README.md.
+name = "webrtc-studio-mailbox"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+[[durable_objects.bindings]]
+name = "BOX"
+class_name = "Box"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Box"]
+
+[observability]
+enabled = false
+
+# Only these pages get TURN credentials from /ice (comma-separated). WHIP
+# encoders get them with each accepted WHIP link regardless.
+[vars]
+ALLOWED_ORIGINS = "https://mihneabont.github.io"

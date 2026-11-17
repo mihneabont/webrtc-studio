@@ -1,0 +1,54 @@
+# Publishes the mailbox (mailbox/worker.js) to Cloudflare Workers whenever it
+# changes on browser-only, or when run by hand from the Actions tab.
+# Needs the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID;
+# TURN_KEY_ID and TURN_KEY_API_TOKEN are optional (see mailbox/README.md).
+name: Deploy mailbox
+
+on:
+  push:
+    branches: [browser-only]
+    paths: ['mailbox/**', '.github/workflows/mailbox.yml']
+  workflow_dispatch:
+
+concurrency: mailbox-deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TURN_KEY_ID: ${{ secrets.TURN_KEY_ID }}
+      TURN_KEY_API_TOKEN: ${{ secrets.TURN_KEY_API_TOKEN }}
+    steps:
+      - name: Check the Cloudflare secrets
+        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        run: echo "::notice::Add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets to publish the mailbox (see mailbox/README.md). Skipping."
+
+      - uses: actions/checkout@v4
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+
+      - name: Publish to Cloudflare
+        id: deploy
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: mailbox
+          wranglerVersion: '4.164.0'
+
+      - name: Set the TURN key
+        if: steps.deploy.outcome == 'success' && env.TURN_KEY_ID != '' && env.TURN_KEY_API_TOKEN != ''
+        working-directory: mailbox
+        run: |
+          node -e 'console.log(JSON.stringify({ TURN_KEY_ID: process.env.TURN_KEY_ID, TURN_KEY_API_TOKEN: process.env.TURN_KEY_API_TOKEN }))' > /tmp/turn.json
+          npx --yes wrangler@4.164.0 secret bulk /tmp/turn.json
+          rm /tmp/turn.json
+
+      - name: Show the mailbox address
+        if: steps.deploy.outcome == 'success'
+        run: |
+          echo "Mailbox address: ${{ steps.deploy.outputs.deployment-url }}"
+          echo "### Mailbox address: ${{ steps.deploy.outputs.deployment-url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Paste it in the studio under Settings → Network → Mailbox." >> "$GITHUB_STEP_SUMMARY"

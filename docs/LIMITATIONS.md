@@ -14,6 +14,7 @@ connections across hard networks.
 | Static file host (HTTPS) | **Yes** | No | Serves the HTML/JS/CSS |
 | STUN server | Optional (default: Google's public STUN) | No | Lets a browser learn its public address. Without it only same-network connections work |
 | TURN server | Optional | Relays encrypted packets, never decodes or mixes | Needed when a direct path is impossible (symmetric NAT, strict firewalls, some mobile and corporate networks) |
+| [Mailbox](../mailbox/README.md) (Cloudflare Worker) | Optional | No | Passes connection details for WHIP encoders and reusable guest links; hands out TURN credentials |
 
 ## 1. Signaling without a server
 
@@ -32,6 +33,12 @@ network where a direct path exists, but:
 
 The contributor page remembers which invites this browser already answered
 and warns when a used link is opened again.
+
+With the optional **mailbox**, both pages keep a WebSocket to it and swap
+offers and answers through it instead. The link is then reusable, and guests
+reconnect by themselves after a refresh, a failed connection or a studio
+reload. The mailbox sees the connection details (including IP addresses) for
+the moment it passes them on, never the media.
 
 ## 2. Network topology (NAT and firewalls)
 
@@ -65,10 +72,11 @@ so; such an endpoint can't be used from a web page.
 - **RTMP and SRT.** Browsers can only send and receive live media over WebRTC,
   so RTMP outputs and SRT inputs aren't offered. Use a platform's WHIP ingest
   (Twitch has one) or a WHIP/WHEP-capable media server in between.
-- **Encoders that publish with WHIP (OBS).** A web page can't accept incoming
-  HTTP requests, so OBS can't publish to the studio directly. OBS on the studio
-  computer can join through OBS Virtual Camera on a contributor page, or
-  publish to a WHIP server that the studio then plays with WHEP.
+- **Encoders that publish with WHIP (OBS, Larix).** A web page can't accept
+  incoming HTTP requests, so this needs the mailbox: the encoder posts to it
+  and the studio answers through it. The studio page must be open while the
+  encoder connects. The encoder must send something the browser can decode
+  (Chrome and Edge take H.264 High; Firefox only Constrained Baseline).
 - **YouTube** sources need Chrome or Edge 132 or later (Element Capture) and a
   pop-up window per video.
 

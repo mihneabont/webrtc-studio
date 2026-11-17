@@ -1,12 +1,18 @@
 // Contributor page: captures a camera/microphone (or screen) and sends it to
-// the studio over WebRTC. Signaling: the invite link carries the studio's
-// offer and this page produces a reply code.
-import { $, el, copyText, fmtKbps, fmtRes, fmtMs } from './util.js';
+// the studio over WebRTC. Signaling: a one-time invite link carries the
+// studio's offer and this page produces a reply code; a reusable link swaps
+// connection details with the studio through the mailbox instead.
+import { $, el, copyText, fmtKbps, fmtRes, fmtMs, sleep } from './util.js';
 import { decodeSignal, encodeSignal } from './codec.js';
 import { rtcConfig, waitForIceGathering, StatsSampler } from './rtc.js';
+import { MailboxSocket } from './mailbox.js';
 
 const params = new URLSearchParams(location.hash.slice(1));
 const offerCode = params.get('c');
+const mbCfg = params.get('mb') && params.get('box') ? { base: params.get('mb'), box: params.get('box'), name: params.get('name') || '' } : null;
+let mailbox = null;
+// Remembered for this tab only, so a refresh rejoins without a click.
+const REJOIN_KEY = mbCfg ? `webrtc-studio.rejoin.${mbCfg.box}` : null;
 
 let local = null;     // MediaStream being sent
 let pc = null, sampler = null, joined = false, wakeLock = null, ctl = null;
@@ -134,6 +140,9 @@ async function answerOffer(msg) {
         leave(false);
       }
     };
+    // The studio page closed or reloaded: ask for a new connection at once
+    // (reusable links), rather than waiting for the network timeout.
+    dc.onclose = () => { if (ctl === dc && mailbox && joined) setTimeout(() => sayHello(), 500); };
     dc.onopen = () => {
       const vt = local?.getVideoTracks()[0];
       const s = vt?.getSettings() || {};
@@ -145,7 +154,12 @@ async function answerOffer(msg) {
     const st = pc.connectionState;
     if (st === 'connected') { setState('live', 'Connected to the studio', 'Your video is reaching the studio. Keep this page open.'); ui.replyCard.classList.add('hidden'); keepAwake(); }
     else if (st === 'disconnected') setState('unstable', 'Connection unstable', 'Trying to recover…');
-    else if (st === 'failed') setState('failed', 'Connection failed', 'Ask the studio operator for a new invite link. If this keeps happening, the studio needs a TURN server for your network.');
+    else if (st === 'failed') {
+      if (mailbox && joined) {
+        setState('failed', 'Connection failed', 'Reconnecting automatically…');
+        setTimeout(() => sayHello(), 2000);
+      } else setState('failed', 'Connection failed', 'Ask the studio operator for a new invite link. If this keeps happening, the studio needs a TURN server for your network.');
+    }
   };
   await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
   for (const t of local.getTracks()) pc.addTrack(t, local);
@@ -176,7 +190,7 @@ async function tuneSenders() {
 
 function closePc() {
   if (pc) { try { pc.close(); } catch { /* ignore */ } }
-  pc = null; sampler = null;
+  pc = null; sampler = null; ctl = null;
 }
 
 async function join() {
@@ -198,6 +212,9 @@ async function join() {
       markInviteUsed(offerCode);
       ui.replyCard.classList.remove('hidden');
       setState('invited', 'Send the reply code to the studio', 'Copy the code below and send it to the operator. You are connected as soon as they paste it.');
+    } else if (mailbox) {
+      try { sessionStorage.setItem(REJOIN_KEY, '1'); } catch { /* private mode */ }
+      sayHello();
     }
   } catch (e) {
     setState('failed', 'Could not start', e.name === 'NotAllowedError' ? 'Camera/microphone permission was denied. Allow it in the browser and try again.' : e.message);
@@ -225,8 +242,34 @@ async function applyDevices() {
   }
 }
 
+function connected() { return pc?.connectionState === 'connected' && ctl?.readyState === 'open'; }
+
+// Reusable link: ask the studio (through the mailbox) for a connection.
+function sayHello() {
+  if (!mailbox || !joined || connected()) return;
+  if (mailbox.state !== 'open') { setState('connecting', 'Contacting the studio…', 'Connecting to the mailbox. This retries by itself.'); return; }
+  setState('connecting', 'Contacting the studio…', 'Waiting for the studio to answer.');
+  mailbox.send({ type: 'hello' });
+}
+
+function onMailbox(m) {
+  if (m.type === 'studio-online' || m.type === 'rehello') { if (joined && !connected()) sleep(200).then(sayHello); }
+  else if (m.type === 'studio-offline') {
+    if (joined && !connected()) setState('connecting', 'Waiting for the studio', 'The studio page isn\'t open right now. You connect as soon as it is; keep this page open.');
+  } else if (m.type === 'offer' && joined) {
+    answerOffer(m).then((sdp) => {
+      mailbox.send({ type: 'answer', sdp, gen: m.gen });
+      setState('connecting', 'Connecting to the studio…');
+    }).catch((e) => setState('failed', 'Negotiation failed', e.message));
+  } else if (m.type === 'bye') {
+    leave(false);
+    setState('ended', 'The studio disconnected you', 'Press Join studio to offer your feed again.');
+  }
+}
+
 function sendBye() {
   try { if (ctl?.readyState === 'open') ctl.send(JSON.stringify({ type: 'bye' })); } catch { /* ignore */ }
+  mailbox?.send({ type: 'bye' });
 }
 
 function leave(notify = true) {
@@ -242,7 +285,8 @@ function leave(notify = true) {
   ui.replyCard.classList.add('hidden');
   ui.frame.classList.remove('pgm', 'pvw');
   wakeLock?.release().catch(() => {});
-  if (notify) setState('ended', 'You left the studio', offerCode ? 'To rejoin, ask the operator for a new invite link.' : '');
+  if (REJOIN_KEY) { try { sessionStorage.removeItem(REJOIN_KEY); } catch { /* ignore */ } }
+  if (notify) setState('ended', 'You left the studio', offerCode ? 'To rejoin, ask the operator for a new invite link.' : 'Press Join studio to come back.');
 }
 
 // --- camera and microphone on/off ------------------------------------------
@@ -373,6 +417,24 @@ window.addEventListener('pagehide', () => { if (joined) sendBye(); });
       setState('failed', 'Invalid invite link', e.message);
       ui.go.disabled = true;
     }
+  } else if (mbCfg) {
+    ui.who.textContent = mbCfg.name ? `as “${mbCfg.name}”` : '';
+    ui.help.textContent = 'This link is reusable: if you are disconnected or refresh the page, you reconnect by yourself. Media goes directly from your browser to the studio; the mailbox only passes connection details.';
+    mailbox = new MailboxSocket(mbCfg.base, mbCfg.box);
+    mailbox.on('message', onMailbox);
+    mailbox.on('state', (st) => {
+      // On connecting, the mailbox says whether the studio is online; that triggers the hello.
+      if (st === 'replaced') {
+        leave(false);
+        setState('failed', 'Opened somewhere else', 'This link was opened in another tab or on another device, which is now connected. Reload this page to take it back.');
+      } else if (st === 'closed' && joined && !connected()) setState('connecting', 'Contacting the studio…', 'Can\'t reach the mailbox. Retrying…');
+    });
+    setState('idle', 'Ready', 'Choose your camera and microphone, then press Join studio.');
+    // After a refresh in the same tab, rejoin at once when the browser still allows the camera.
+    let rejoin = false;
+    try { rejoin = sessionStorage.getItem(REJOIN_KEY) === '1'; } catch { /* ignore */ }
+    const cam = await navigator.permissions?.query({ name: 'camera' }).catch(() => null);
+    if (rejoin && cam?.state === 'granted') join();
   } else {
     setState('failed', 'No invite', 'Open the invite link the studio operator sent you.');
     ui.go.disabled = true;

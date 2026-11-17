@@ -6,6 +6,7 @@ import { field, text, select, check, linkBox, statLine, CardList, SECRET } from 
 import { parseYouTube, fmtClock, youTubeSupported } from '../youtube.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
+import { MAILBOX_URL } from '../mailbox.js';
 
 const TABS = { sources: 'Sources', scenes: 'Scenes', graphics: 'Graphics', outputs: 'Outputs', settings: 'Settings' };
 
@@ -43,12 +44,14 @@ export function mountSide(app, root) {
 
 // ---------------------------------------------------------------------------
 // Source types offered in the Sources tab, in this order. Icons are 24x24 line
-// drawings (SVG path data), drawn in the text colour. WHEP is a globe with an
-// arrow down: it plays from a server.
+// drawings (SVG path data), drawn in the text colour. WHEP and WHIP are a globe
+// with an arrow: WHEP plays from a server (arrow down), WHIP is an encoder
+// publishing (arrow up).
 const GLOBE = ['M17 10a7 7 0 1 1-14 0a7 7 0 1 1 14 0', 'M3 10h14', 'M10 3a10.5 10.5 0 0 1 0 14a10.5 10.5 0 0 1 0-14'];
 const SOURCE_KINDS = {
   peer: { label: 'Invite link', icon: ['M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5', 'M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5'] },
   whep: { label: 'WHEP', icon: [...GLOBE, 'M19 14v7', 'M16 18l3 3 3-3'] },
+  whip: { label: 'WHIP', icon: [...GLOBE, 'M19 21v-7', 'M16 17l3-3 3 3'] },
   youtube: { label: 'YouTube', icon: ['M2.5 8.5a3 3 0 0 1 2.6-2.9C7.4 5.2 9.7 5 12 5s4.6.2 6.9.6a3 3 0 0 1 2.6 2.9 30 30 0 0 1 0 7 3 3 0 0 1-2.6 2.9c-2.3.4-4.6.6-6.9.6s-4.6-.2-6.9-.6a3 3 0 0 1-2.6-2.9 30 30 0 0 1 0-7z', 'M10 9.5v5l4.5-2.5z'] },
 };
 
@@ -78,7 +81,7 @@ function mountSourcesTab(app, root) {
   const add = () => {
     const s = sources.add({ name: nameIn.value.trim(), kind });
     nameIn.value = '';
-    if (s.cfg.kind === 'peer') invite(s);
+    if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') invite(s);
   };
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
 
@@ -88,7 +91,7 @@ function mountSourcesTab(app, root) {
   const empty = el('div', { class: 'empty-state' },
     kindIcon(['M3 8a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M16 10l5-3v10l-5-3']),
     el('div', { class: 'empty-title' }, 'Add a source to start'),
-    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, play a stream from a WHEP server, or play a YouTube video. '
+    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, connect an encoder such as OBS with WHIP, play a stream from a WHEP server, or play a YouTube video. '
       + 'Each source then appears here and in the multiview, ready to put on Preview and Programme.'));
   root.append(
     el('div', { class: 'section-title' }, 'Add source'),
@@ -104,7 +107,10 @@ function mountSourcesTab(app, root) {
       b.setAttribute('aria-checked', String(b.dataset.kind === kind));
     }
     const text = {
-      peer: 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
+      peer: sources.mailbox()
+        ? 'Send someone a link: they open it in a phone or computer browser and allow camera and microphone. The link is reusable and reconnects by itself, even after a refresh. Video goes directly from their browser to this one.'
+        : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
+      whip: 'For encoders that publish with WHIP: OBS, Larix, vMix and hardware encoders. The source gives you a link to paste into the encoder, from anywhere, with no install or port forwarding. Video goes straight from the encoder to this browser; keep the studio open while it streams.',
       whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. The server must accept requests from web pages (CORS).',
       youtube: 'Play a YouTube video as a source. Paste its link and click Connect: a small window opens with YouTube\'s own player; click Start there and choose Allow. The studio receives just the video, with its own sound on its own fader (programme only, not your speakers), and nothing is downloaded. Keep the window open. Then play, pause, seek and loop it from the source card. Only use videos you have the rights to broadcast.'
         + (youTubeSupported() ? '' : ' Not available in this browser (Firefox): YouTube sources need Chrome or Edge.'),
@@ -130,7 +136,7 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn sm', onclick: () => switcher.setPreview({ kind: 'source', id: s.id }) }, 'Preview'));
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
-      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'youtube' ? ' · YouTube' : ' · invite link',
+      { whep: ' · WHEP', whip: ' · WHIP', youtube: ' · YouTube' }[s.cfg.kind] || (s.cfg.mode === 'mailbox' ? ' · reusable link' : ' · invite link'),
       s.info?.device ? ` · ${s.info.device}` : '',
       s.pc && s.paused?.video ? el('span', { class: 'paused-chip' }, 'camera off') : null,
       s.pc && s.paused?.audio ? el('span', { class: 'paused-chip' }, 'mic off') : null);
@@ -140,7 +146,11 @@ function mountSourcesTab(app, root) {
 
     const actions = [];
     const live = !!s.pc;
-    if (s.cfg.kind === 'peer') {
+    if (s.cfg.kind === 'whip') {
+      actions.push(...whipActions(s, live));
+    } else if (s.cfg.kind === 'peer' && s.cfg.mode === 'mailbox') {
+      actions.push(...guestActions(s, live));
+    } else if (s.cfg.kind === 'peer') {
       if (s.state === 'invited' && s.invite) {
         const ta = el('textarea', { rows: 3, placeholder: 'Paste the reply code from the contributor page' });
         ta.value = drafts.get(s.id) || '';
@@ -173,6 +183,10 @@ function mountSourcesTab(app, root) {
     const settings = el('details', {}, el('summary', {}, 'Source settings'),
       el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
         field('Name', text(s.cfg.name, (v) => v.trim() && sources.update(s.id, { name: v.trim() }))),
+        s.cfg.kind === 'peer' && (sources.mailbox() || s.cfg.mode === 'mailbox')
+          ? field('Link type', select({ mailbox: 'Reusable link (reconnects by itself)', manual: 'One-time link with reply code' }, s.cfg.mode, (v) => sources.setPeerMode(s.id, v)),
+            'A reusable link goes through the mailbox, which only passes connection details on. A one-time link needs no server at all.')
+          : null,
         el('div', { class: 'btn-row' }, el('button', { class: 'btn danger sm', onclick: () => {
           if (confirm(`Remove "${s.cfg.name}"? Its connection is closed and its configuration deleted.`)) sources.remove(s.id);
         } }, 'Remove source'))));
@@ -180,6 +194,52 @@ function mountSourcesTab(app, root) {
     return el('div', { class: `card ${s.state === 'live' ? 'live' : s.state === 'failed' ? 'failed' : ''}`, dataset: { id: s.id } },
       head, state, detail, err, stats, ...actions, settings);
   });
+
+  // Without a mailbox address, what to show instead of a WHIP or guest link.
+  function mailboxMissing() {
+    return [el('div', { class: 'note warn' }, 'This needs the mailbox, a small service that passes connection details between the encoder or guest and this page. Enter its address in Settings → Network.'),
+      el('div', { class: 'btn-row' }, el('button', { class: 'btn', onclick: () => app.ui.showTab?.('settings', 'network') }, 'Open Settings'))];
+  }
+
+  // The mailbox connection is shared by the link: say when it's not working.
+  function mailboxNote(s) {
+    if (s.mb?.state === 'replaced') {
+      return el('div', { class: 'btn-row' }, el('button', { class: 'btn primary', onclick: () => sources.reconnect(s.id) }, 'Use it here'));
+    }
+    return null;
+  }
+
+  function newLinkBtn(s, what) {
+    return el('button', { class: 'btn sm', title: `Make a new ${what}; the old one stops working`, onclick: () => {
+      if (confirm(`Make a new ${what}? The current one stops working.`)) sources.newLink(s.id);
+    } }, 'New link');
+  }
+
+  function whipActions(s, live) {
+    if (!sources.mailbox()) return mailboxMissing();
+    return [
+      field('WHIP link', linkBox(sources.whipUrl(s.id), 'Copy')),
+      el('div', { class: 'small muted' }, 'In OBS: Settings → Stream → Service: WHIP. Paste the link as the Server and leave Bearer Token empty. In Larix: Settings → Connections → New connection, and paste the link as the URL. Use H.264 video with a keyframe every 1-2 seconds. Start streaming and the source connects by itself.'),
+      mailboxNote(s),
+      el('div', { class: 'btn-row' },
+        live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect')
+          : s.blocked ? el('button', { class: 'btn primary', onclick: () => sources.reconnect(s.id) }, 'Accept encoder') : null,
+        newLinkBtn(s, 'WHIP link')),
+    ];
+  }
+
+  function guestActions(s, live) {
+    if (!sources.mailbox()) return mailboxMissing();
+    return [
+      el('div', { class: 'small muted' }, 'Send this link to the guest. It keeps working: they can refresh or come back later and reconnect by themselves.'),
+      linkBox(sources.guestLink(s.id), 'Copy link'),
+      mailboxNote(s),
+      el('div', { class: 'btn-row' },
+        el('button', { class: `btn ${live ? '' : 'primary'}`, onclick: () => sources.reconnect(s.id) }, 'Reconnect'),
+        live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null,
+        newLinkBtn(s, 'guest link')),
+    ];
+  }
 
   // YouTube: a link and Connect, then the player's controls and a progress bar.
   function ytActions(s) {
@@ -273,6 +333,16 @@ function mountSettingsTab(app, root) {
   const st = store.ws.settings;
   const save = () => store.save();
   const ice = st.ice;
+  const mailboxStatus = el('div', { class: 'small muted' });
+  const renderMailbox = () => {
+    const m = app.mailboxIce || {};
+    mailboxStatus.textContent = !app.sources.mailbox() ? 'No mailbox: WHIP links and reusable guest links are off.'
+      : m.state === 'error' ? `Can't reach the mailbox at ${app.sources.mailbox()}.`
+        : m.state === 'ok' ? (ice.turnUrl ? 'Mailbox reachable. Using your own TURN server below.' : m.turn ? 'Mailbox reachable. TURN relay on: connections also work between strict networks.' : 'Mailbox reachable. No TURN relay is set up on it.')
+          : 'Checking the mailbox…';
+  };
+  renderMailbox();
+  app.ui.on('settings', renderMailbox);
 
   const fileIn = el('input', { type: 'file', accept: 'application/json', class: 'hidden' });
   fileIn.addEventListener('change', async () => {
@@ -291,12 +361,16 @@ function mountSettingsTab(app, root) {
   ];
 
   root.append(
-    el('div', { class: 'section-title' }, 'Network (optional)'),
+    el('div', { class: 'section-title', dataset: { section: 'network' } }, 'Network (optional)'),
     el('div', { class: 'note' },
       'This app needs only static hosting: everything runs in the browser. ',
       'STUN discovers public addresses; TURN relays media when two networks cannot connect directly (strict NAT/firewalls). ',
       'Without TURN, some contributor networks will not connect at all.'),
     el('div', { class: 'card' },
+      field('Mailbox', text(st.mailboxUrl || '', (v) => app.setMailboxUrl(v), { type: 'url', placeholder: MAILBOX_URL || 'https://webrtc-studio-mailbox.<you>.workers.dev', autocomplete: 'off' }),
+        MAILBOX_URL ? 'Leave empty to use the built-in mailbox. It passes connection details for WHIP links and reusable guest links; video never goes through it.'
+          : 'The address of your mailbox service (see mailbox/README.md). It passes connection details for WHIP links and reusable guest links; video never goes through it.'),
+      mailboxStatus,
       field('STUN servers', text(ice.stun, (v) => { ice.stun = v.trim(); save(); }, { placeholder: 'stun:stun.l.google.com:19302' }), 'Space-separated. Leave empty for LAN-only operation.'),
       field('TURN server URL', text(ice.turnUrl, (v) => { ice.turnUrl = v.trim(); save(); }, { placeholder: 'turn:turn.example.com:3478?transport=udp' })),
       el('div', { class: 'grid2' },
