@@ -1,17 +1,15 @@
 // Contributor page: captures a camera/microphone (or screen) and sends it to
 // the studio over WebRTC. Signaling: the invite link carries the studio's
-// offer and this page produces a reply code, or the optional relay does it.
-import { $, el, copyText, fmtKbps, fmtRes, fmtMs, sleep } from './util.js';
+// offer and this page produces a reply code.
+import { $, el, copyText, fmtKbps, fmtRes, fmtMs } from './util.js';
 import { decodeSignal, encodeSignal } from './codec.js';
 import { rtcConfig, waitForIceGathering, StatsSampler } from './rtc.js';
-import { Relay } from './relay.js';
 
 const params = new URLSearchParams(location.hash.slice(1));
 const offerCode = params.get('c');
-const relayCfg = params.get('sig') ? { sig: params.get('sig'), room: params.get('room'), slot: params.get('slot'), name: params.get('name') } : null;
 
 let local = null;     // MediaStream being sent
-let pc = null, sampler = null, relay = null, joined = false, wakeLock = null, ctl = null;
+let pc = null, sampler = null, joined = false, wakeLock = null, ctl = null;
 let camOn = true, micOn = true; // paused by the contributor: the connection stays up
 let offerMsg = null;
 
@@ -147,10 +145,7 @@ async function answerOffer(msg) {
     const st = pc.connectionState;
     if (st === 'connected') { setState('live', 'Connected to the studio', 'Your video is reaching the studio. Keep this page open.'); ui.replyCard.classList.add('hidden'); keepAwake(); }
     else if (st === 'disconnected') setState('unstable', 'Connection unstable', 'Trying to recover…');
-    else if (st === 'failed') {
-      setState('failed', 'Connection failed', relay ? 'Reconnecting automatically…' : 'Ask the studio operator for a new invite link. If this keeps happening, the studio needs a TURN server for your network.');
-      if (relay && joined) setTimeout(() => sayHello(), 2000);
-    }
+    else if (st === 'failed') setState('failed', 'Connection failed', 'Ask the studio operator for a new invite link. If this keeps happening, the studio needs a TURN server for your network.');
   };
   await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
   for (const t of local.getTracks()) pc.addTrack(t, local);
@@ -203,8 +198,6 @@ async function join() {
       markInviteUsed(offerCode);
       ui.replyCard.classList.remove('hidden');
       setState('invited', 'Send the reply code to the studio', 'Copy the code below and send it to the operator. You are connected as soon as they paste it.');
-    } else if (relay) {
-      sayHello();
     }
   } catch (e) {
     setState('failed', 'Could not start', e.name === 'NotAllowedError' ? 'Camera/microphone permission was denied. Allow it in the browser and try again.' : e.message);
@@ -232,15 +225,8 @@ async function applyDevices() {
   }
 }
 
-function sayHello() {
-  if (!relay || !joined) return;
-  setState('connecting', 'Contacting the studio…', 'Waiting for the studio to answer. It reconnects automatically.');
-  relay.send('studio', { type: 'hello' }).catch((e) => setState('failed', 'Signaling relay unreachable', e.message));
-}
-
 function sendBye() {
   try { if (ctl?.readyState === 'open') ctl.send(JSON.stringify({ type: 'bye' })); } catch { /* ignore */ }
-  if (relay) relay.send('studio', { type: 'bye' }).catch(() => {});
 }
 
 function leave(notify = true) {
@@ -256,7 +242,7 @@ function leave(notify = true) {
   ui.replyCard.classList.add('hidden');
   ui.frame.classList.remove('pgm', 'pvw');
   wakeLock?.release().catch(() => {});
-  if (notify) setState('ended', 'You left the studio', offerCode ? 'To rejoin, ask the operator for a new invite link.' : 'Press Join to come back.');
+  if (notify) setState('ended', 'You left the studio', offerCode ? 'To rejoin, ask the operator for a new invite link.' : '');
 }
 
 // --- camera and microphone on/off ------------------------------------------
@@ -387,31 +373,6 @@ window.addEventListener('pagehide', () => { if (joined) sendBye(); });
       setState('failed', 'Invalid invite link', e.message);
       ui.go.disabled = true;
     }
-  } else if (relayCfg) {
-    ui.who.textContent = relayCfg.name ? `as “${relayCfg.name}”` : '';
-    relay = new Relay(relayCfg.sig, relayCfg.room, `src-${relayCfg.slot}`);
-    relay.on('state', (st) => { if (st === 'open' && joined && (!pc || pc.connectionState !== 'connected')) sayHello(); });
-    relay.on('message', async (m) => {
-      if (m.from !== 'studio') return;
-      if (m.type === 'offer' && joined) {
-        try {
-          const sdp = await answerOffer(m);
-          await relay.send('studio', { type: 'answer', sdp, gen: m.gen });
-          setState('connecting', 'Connecting to the studio…');
-        } catch (e) { setState('failed', 'Negotiation failed', e.message); }
-      } else if (m.type === 'rehello') {
-        if (joined && (!pc || pc.connectionState !== 'connected')) { await sleep(300); sayHello(); }
-      } else if (m.type === 'bye') {
-        closePc();
-        setState('ended', 'The studio disconnected you', 'Press Join studio to offer your feed again.');
-        joined = false; ui.go.textContent = 'Join studio';
-      } else if (m.type === 'unknown-slot') {
-        setState('failed', 'Unknown source', 'The studio no longer has this source. Ask the operator for a new link.');
-      }
-    });
-    relay.connect();
-    setState('idle', 'Ready', 'Choose your camera and microphone, then press Join studio.');
-    ui.help.textContent = 'This link is reusable and reconnects automatically. Media goes directly from your browser to the studio; the signaling relay only passes connection details.';
   } else {
     setState('failed', 'No invite', 'Open the invite link the studio operator sent you.');
     ui.go.disabled = true;

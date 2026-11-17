@@ -1,6 +1,6 @@
 // End-to-end test with genuine WebRTC connections between real browser pages
 // (Chromium with fake camera/microphone devices as the contributors' capture).
-// Usage: node signaling-server/server.mjs --static . &   then   node tests/e2e.mjs
+// Usage: node tests/serve.mjs --port 8787 &   then   node tests/e2e.mjs
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 
@@ -198,23 +198,46 @@ await rx.screenshot({ path: `${SHOTS}/03-receiver.png` });
 const outStats = await studio.evaluate(() => { const o = window.studio.outputs.all()[0]; return o.stats?.out.video ? { w: o.stats.out.video.width, fps: o.stats.out.video.fps, kbps: Math.round(o.stats.out.video.kbps), codec: o.stats.out.video.codec, encoder: o.stats.out.video.encoder } : null; });
 check('Output statistics reported', !!outStats?.w, JSON.stringify(outStats));
 
-// ---- 6. WHIP output against the WHIP test sink -----------------------------------------
+// ---- 6. WHIP output against an in-browser WHIP sink ------------------------------------
+// No server: Playwright answers the studio's WHIP requests, and a second page
+// plays the role of the ingest server (answers the offer and plays the media).
 const whipRx = await ctx.newPage();
 watch(whipRx, 'whip-rx');
-await whipRx.goto(`${BASE}/receive.html#sig=${encodeURIComponent(BASE)}&room=whiptest&out=w1`);
-await sleep(800);
+await whipRx.goto(`${BASE}/receive.html`);
+let whipDeleted = false;
+await studio.route(`${BASE}/whip-sink/**`, async (route) => {
+  const req = route.request();
+  if (req.method() === 'POST') {
+    const answer = await whipRx.evaluate(async (offer) => {
+      const pc = new RTCPeerConnection();
+      const v = document.createElement('video'); v.muted = true; v.autoplay = true; document.body.append(v);
+      const ms = new MediaStream();
+      pc.ontrack = (e) => { ms.addTrack(e.track); v.srcObject = ms; v.play().catch(() => {}); };
+      window.sink = { pc, video: v };
+      await pc.setRemoteDescription({ type: 'offer', sdp: offer });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); });
+      return pc.localDescription.sdp;
+    }, req.postData());
+    await route.fulfill({ status: 201, headers: { 'Content-Type': 'application/sdp', Location: `${BASE}/whip-sink/session/w1` }, body: answer });
+  } else if (req.method() === 'DELETE') {
+    whipDeleted = true;
+    await whipRx.evaluate(() => window.sink?.pc.close());
+    await route.fulfill({ status: 200, body: '' });
+  } else await route.fulfill({ status: 405, body: '' });
+});
 await studio.evaluate((base) => {
-  const o = window.studio.outputs.add({ kind: 'whip', name: 'WHIP test', url: `${base}/whip/whiptest/w1` });
+  const o = window.studio.outputs.add({ kind: 'whip', name: 'WHIP test', url: `${base}/whip-sink/w1` });
   // Playwright's open-source Chromium has no H.264 encoder, so this uses the browser default (VP8).
   return window.studio.outputs.start(o.id);
 }, BASE);
 const whipLive = await until(() => studio.evaluate(() => window.studio.outputs.all().find((o) => o.cfg.kind === 'whip')?.state === 'live'), 20000);
 const whipInfo = await studio.evaluate(() => { const o = window.studio.outputs.all().find((x) => x.cfg.kind === 'whip'); return { state: o.state, detail: o.detail, negotiated: o.negotiated, resource: !!o.resourceUrl }; });
 check('WHIP output: POST offer, 201 + Location, media connects', !!whipLive && whipInfo.resource, JSON.stringify(whipInfo));
-const whipMedia = await until(() => whipRx.evaluate(() => window.receiver.video.videoWidth > 0 && window.receiver.pc?.connectionState === 'connected'), 15000);
+const whipMedia = await until(() => whipRx.evaluate(() => window.sink.video.videoWidth > 0 && window.sink.pc.connectionState === 'connected'), 15000);
 check('WHIP receiver plays the programme', !!whipMedia);
 await studio.evaluate(() => window.studio.outputs.stop(window.studio.outputs.all().find((o) => o.cfg.kind === 'whip').id));
-const whipStopped = await until(() => whipRx.evaluate(() => document.querySelector('#state').textContent.includes('stopped')), 8000);
+const whipStopped = await until(() => whipDeleted && whipRx.evaluate(() => window.sink.pc.connectionState === 'closed'), 8000);
 check('Stopping WHIP sends DELETE and the session ends', !!whipStopped);
 
 // ---- 7. Twitch output: real request against Twitch's WHIP endpoint ---------------------------

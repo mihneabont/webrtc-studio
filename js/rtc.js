@@ -236,11 +236,6 @@ export class HttpSignalError extends Error {
   constructor(message, { status, kind } = {}) { super(message); this.status = status; this.kind = kind; }
 }
 
-function viaProxy(url, proxy) {
-  if (!proxy) return url;
-  return `${proxy.replace(/\/+$/, '')}/forward?target=${encodeURIComponent(url)}`;
-}
-
 function explainStatus(status, body, what) {
   const tail = body ? ` Server said: ${body.slice(0, 200)}` : '';
   switch (status) {
@@ -255,17 +250,15 @@ function explainStatus(status, body, what) {
   }
 }
 
-async function httpSdp({ url, token, sdp, proxy, what }) {
+async function httpSdp({ url, token, sdp, what }) {
   const headers = { 'Content-Type': 'application/sdp' };
   if (token) headers.Authorization = `Bearer ${token}`;
   let res;
   try {
-    res = await fetch(viaProxy(url, proxy), { method: 'POST', headers, body: sdp, mode: 'cors', redirect: 'follow' });
+    res = await fetch(url, { method: 'POST', headers, body: sdp, mode: 'cors', redirect: 'follow' });
   } catch (e) {
     throw new HttpSignalError(
-      `The browser could not complete the ${what} request. Either the endpoint is unreachable, or it does not allow requests from a web page (CORS). ` +
-      (proxy ? 'The configured CORS forwarder also failed: check that it is running.' :
-        'If the endpoint lacks CORS support, set the optional WHIP/WHEP CORS forwarder in Settings (it relays only the SDP, never media).'),
+      `The browser could not complete the ${what} request. Either the endpoint is unreachable, or it does not allow requests from a web page (CORS).`,
       { kind: 'network' });
   }
   const text = await res.text().catch(() => '');
@@ -276,10 +269,9 @@ async function httpSdp({ url, token, sdp, proxy, what }) {
     throw new HttpSignalError(`The ${what} endpoint answered ${res.status} but the body is not an SDP answer.`, { status: res.status, kind: 'http' });
   }
   const loc = res.headers.get('Location');
-  // When proxied, the forwarder rewrites Location to an absolute proxied URL.
   let resourceUrl = null;
   if (loc) {
-    try { resourceUrl = new URL(loc, proxy ? undefined : res.url || url).toString(); } catch { resourceUrl = loc; }
+    try { resourceUrl = new URL(loc, res.url || url).toString(); } catch { resourceUrl = loc; }
   }
   return { answer: text, resourceUrl, etag: res.headers.get('ETag') };
 }

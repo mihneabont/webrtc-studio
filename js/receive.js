@@ -1,19 +1,17 @@
 // Programme receiver: plays the studio's outgoing WebRTC programme.
-import { $, el, copyText, fmtKbps, fmtRes, fmtMs, sleep } from './util.js';
+import { $, el, copyText, fmtKbps, fmtRes, fmtMs } from './util.js';
 import { decodeSignal, encodeSignal } from './codec.js';
 import { rtcConfig, waitForIceGathering, StatsSampler } from './rtc.js';
-import { Relay } from './relay.js';
 
 const params = new URLSearchParams(location.hash.slice(1));
 const offerCode = params.get('c');
-const relayCfg = params.get('sig') ? { sig: params.get('sig'), room: params.get('room'), out: params.get('out') } : null;
 
 const ui = {
   dot: $('#dot'), state: $('#state'), detail: $('#detail'), video: $('#pgm'), frame: $('#frame'), unmute: $('#unmute'),
   replyCard: $('#replyCard'), reply: $('#reply'), copy: $('#copy'), copied: $('#copied'), stats: $('#stats'), kv: $('#kv'),
   fs: $('#fs'), mute: $('#mute'), who: $('#who'),
 };
-let pc = null, sampler = null, relay = null;
+let pc = null, sampler = null;
 window.receiver = { get pc() { return pc; }, video: ui.video }; // for tests and debugging
 
 function setState(kind, title, detail = '') {
@@ -37,20 +35,12 @@ async function answer(msg) {
     const st = pc.connectionState;
     if (st === 'connected') { setState('live', 'Receiving programme', 'Live from the studio.'); ui.replyCard.classList.add('hidden'); }
     else if (st === 'disconnected') setState('unstable', 'Connection unstable', 'Trying to recover…');
-    else if (st === 'failed') {
-      setState('failed', 'Connection failed', relay ? 'Reconnecting automatically…' : 'Ask the operator to restart this output and send a new link.');
-      if (relay) setTimeout(hello, 2000);
-    }
+    else if (st === 'failed') setState('failed', 'Connection failed', 'Ask the operator to restart this output and send a new link.');
   };
   await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
   await pc.setLocalDescription(await pc.createAnswer());
   await waitForIceGathering(pc);
   return pc.localDescription.sdp;
-}
-
-function hello() {
-  setState('connecting', 'Waiting for the studio', 'The output must be started in the studio. This page connects automatically.');
-  relay.send('studio', { type: 'hello' }).catch((e) => setState('failed', 'Signaling relay unreachable', e.message));
 }
 
 ui.unmute.addEventListener('click', () => { ui.video.muted = false; ui.video.play(); ui.unmute.classList.add('hidden'); ui.mute.textContent = 'Mute'; });
@@ -93,29 +83,6 @@ setInterval(async () => {
     } catch (e) {
       setState('failed', 'Could not use this link', e.message);
     }
-  } else if (relayCfg) {
-    relay = new Relay(relayCfg.sig, relayCfg.room, `out-${relayCfg.out}`);
-    relay.on('state', (st) => { if (st === 'open' && (!pc || pc.connectionState !== 'connected')) hello(); });
-    relay.on('message', async (m) => {
-      if (m.from !== 'studio') return;
-      if (m.type === 'offer') {
-        ui.who.textContent = m.name ? `“${m.name}”` : '';
-        try {
-          const sdp = await answer(m);
-          await relay.send('studio', { type: 'answer', sdp, gen: m.gen });
-          setState('connecting', 'Connecting…');
-        } catch (e) { setState('failed', 'Negotiation failed', e.message); }
-      } else if (m.type === 'rehello') {
-        if (!pc || pc.connectionState !== 'connected') { await sleep(300); hello(); }
-      } else if (m.type === 'not-started') {
-        setState('waiting', 'Output not started', 'The operator has not started this output yet. This page connects automatically when they do.');
-      } else if (m.type === 'bye') {
-        pc?.close(); pc = null; sampler = null;
-        setState('ended', 'Output stopped', 'The operator stopped this output. This page reconnects when it restarts.');
-      }
-    });
-    relay.connect();
-    window.addEventListener('pagehide', () => relay.send('studio', { type: 'bye' }).catch(() => {}));
   } else {
     setState('failed', 'No link', 'Open the receiver link from the studio.');
   }

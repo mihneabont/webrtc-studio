@@ -66,7 +66,7 @@ never needed them.
 | What you see | Meaning | Next step |
 | --- | --- | --- |
 | State **Live**, stats show H264 bytes flowing, and your channel is live on twitch.tv | Works | Switch sources and run transitions while watching the channel |
-| "could not complete the WHIP request … (CORS)" | Endpoint reachable only from native apps | Run `node signaling-server/server.mjs` somewhere, set its URL as the WHIP/WHEP CORS forwarder in Settings, retry. Only the SDP request goes through it |
+| "could not complete the WHIP request … (CORS)" | Endpoint reachable only from native apps | Twitch can't be reached from a web page; there is no browser-only workaround |
 | "Authentication failed (401/403)" | Key rejected, or endpoint no longer accepts this auth | Check the key; if correct, the endpoint's auth has changed |
 | 404/410, DNS failure or no response | Endpoint withdrawn | Twitch no longer offers browser-reachable WebRTC ingest |
 | Live in the studio but the channel stays offline | Ingest accepted media Twitch doesn't publish (seen in the OBS issue above) | Try 1280×720 30 fps and 4500 kb/s |
