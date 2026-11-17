@@ -6,7 +6,7 @@
 //  - "twitch": WHIP with Twitch-specific settings (H.264 + Opus, bitrate caps)
 import { Emitter, uid } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
-import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whipPublish, httpTeardown, preferCodec, codecSupported, sdpCodecs, HttpSignalError } from './rtc.js';
+import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whipPublish, httpTeardown, preferCodec, codecSupported, sdpCodecs, HttpSignalError, iceForPeer } from './rtc.js';
 
 export const TWITCH = {
   // Undocumented by Twitch's official docs as of 2026-10: this is the endpoint
@@ -198,7 +198,7 @@ export class OutputManager extends Emitter {
     await pc.setLocalDescription(await pc.createOffer());
     await waitForIceGathering(pc);
     if (o.gen !== gen) return null;
-    const code = await encodeSignal({ t: 'offer', role: 'receive', out: o.id, name: o.cfg.name, ice: this.ws.settings.ice, sdp: pc.localDescription.sdp });
+    const code = await encodeSignal({ t: 'offer', role: 'receive', out: o.id, name: o.cfg.name, ice: iceForPeer(this.ws.settings.ice), sdp: pc.localDescription.sdp });
     o.invite = { code, link: new URL(`receive.html#c=${code}`, location.href).toString() };
     this._set(o, 'invited', 'Open the receiver link on the receiving device, then paste its reply code here.');
     return o.invite;

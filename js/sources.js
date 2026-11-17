@@ -1,14 +1,18 @@
 // Incoming WebRTC sources.
-//  - "peer": a remote contributor opens contribute.html. Signaling by
-//    copy-paste codes (no infrastructure at all).
+//  - "peer": a remote guest opens contribute.html. Signaling through the
+//    mailbox (one reusable link that reconnects by itself) or by copy-paste
+//    codes (no infrastructure at all).
 //  - "whep": pull from any WHEP endpoint (an external WebRTC server/encoder).
+//  - "whip": an encoder (OBS, Larix…) publishes to this source's WHIP link on
+//    the mailbox, which passes the offer to this page.
 //  - "youtube": a video playing in its own small player window.
 // Every source has its own RTCPeerConnection, so one failing never affects
 // the others.
 import { Emitter, uid } from './util.js';
 import { encodeSignal, decodeSignal } from './codec.js';
 import { parseYouTube, youTubeSupported } from './youtube.js';
-import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whepSubscribe, httpTeardown, sdpCodecs } from './rtc.js';
+import { rtcConfig, waitForIceGathering, StatsSampler, diagnoseFailure, whepSubscribe, httpTeardown, sdpCodecs, iceForPeer } from './rtc.js';
+import { MailboxSocket, mailboxBase } from './mailbox.js';
 
 export const SOURCE_STATES = {
   offline: 'Not connected',
@@ -23,8 +27,46 @@ export const SOURCE_STATES = {
 
 export function stateLabel(s) {
   if (s.cfg.kind === 'youtube' && (s.state === 'waiting' || s.state === 'invited')) return 'Waiting for player';
+  if (s.cfg.kind === 'whip' && s.state === 'waiting') return 'Waiting for encoder';
+  if (s.cfg.kind === 'peer' && s.state === 'waiting') return 'Waiting for guest';
   return SOURCE_STATES[s.state] || s.state;
 }
+
+// Describes the offered media our answer rejected (port 0), e.g.
+// 'video (H.264 High, 64001f)', or null if everything was accepted. Firefox,
+// for example, only receives H.264 Constrained Baseline.
+const H264_PROFILES = { 42: 'Baseline', '4d': 'Main', 58: 'Extended', 64: 'High' };
+function mediaSections(sdp) {
+  return (sdp || '').split(/\r?\nm=/).slice(1).map((sec) => {
+    const [, kind, port, pts] = /^(\w+) (\d+) \S+ ?([\d ]*)/.exec(sec) || [];
+    const pt = (pts || '').split(' ')[0];
+    const codec = new RegExp(`a=rtpmap:${pt} ([\\w-]+)/`).exec(sec)?.[1];
+    const plid = new RegExp(`a=fmtp:${pt} .*profile-level-id=([0-9a-f]{6})`, 'i').exec(sec)?.[1]?.toLowerCase();
+    return { kind, port: Number(port), codec, plid };
+  });
+}
+function rejectedMedia(offer, answer) {
+  const off = mediaSections(offer), ans = mediaSections(answer);
+  const bad = off.filter((o, i) => o.port !== 0 && ans[i]?.port === 0);
+  if (!bad.length) return null;
+  return bad.map((o) => {
+    const prof = o.codec === 'H264' && o.plid ? `H.264 ${H264_PROFILES[o.plid.slice(0, 2)] || 'profile'}, ${o.plid}` : o.codec;
+    return `${o.kind}${prof ? ` (${prof})` : ''}`;
+  }).join(' and ');
+}
+
+// Chrome hides this computer's own addresses behind random "….local" names.
+// Encoders such as OBS can't resolve those and give up at once, so drop them:
+// the browser still reaches the encoder's own addresses, and its public
+// address (from STUN) and TURN relays stay in the answer.
+function dropMdnsCandidates(sdp) {
+  return sdp.split('\r\n').filter((l) => !/^a=candidate:\S+ \d+ \S+ \d+ \S+\.local /i.test(l)).join('\r\n');
+}
+
+const WAITING = {
+  whip: 'Waiting for the encoder. Paste the WHIP link into it and start streaming.',
+  peer: 'Waiting for the guest to open the link.',
+};
 
 export class SourceManager extends Emitter {
   constructor(store) {
@@ -32,6 +74,7 @@ export class SourceManager extends Emitter {
     this.store = store;
     this.list = new Map(); // id -> runtime
     for (const cfg of store.ws.sources) this._makeRuntime(cfg);
+    for (const s of this.list.values()) this._mbOpen(s);
     this._statsTimer = setInterval(() => this._sampleAll(), 1000);
     window.addEventListener('pagehide', () => {
       for (const s of this.list.values()) if (s.resourceUrl) httpTeardown(s.resourceUrl, s.token, { keepalive: true });
@@ -62,12 +105,14 @@ export class SourceManager extends Emitter {
   add({ name, kind = 'peer', whepUrl = '' }) {
     const cfg = {
       id: uid(4), name: name || `Source ${this.ws.sources.length + 1}`, kind,
-      mode: 'manual', whepUrl,
+      mode: kind === 'whip' ? 'whip' : this.mailbox() ? 'mailbox' : 'manual', whepUrl,
     };
+    if (kind === 'whip' || kind === 'peer') Object.assign(cfg, { box: uid(12), key: uid(16) });
     if (kind === 'youtube') Object.assign(cfg, { mode: 'youtube', ytUrl: '', ytLoop: false });
     this.ws.sources.push(cfg);
     this.store.save();
     const s = this._makeRuntime(cfg);
+    this._mbOpen(s);
     this.emit('added', s);
     this.emit('change', s);
     return s;
@@ -77,6 +122,7 @@ export class SourceManager extends Emitter {
     const s = this.list.get(id);
     if (!s) return;
     this._teardown(s, 'removed');
+    this._mbClose(s);
     if (s.cfg.kind === 'youtube') this._ytClose(s);
     this.list.delete(id);
     this.ws.sources = this.ws.sources.filter((c) => c.id !== id);
@@ -114,7 +160,7 @@ export class SourceManager extends Emitter {
   // -------------------------------------------------------------------------
   // Connection lifecycle
 
-  _newConnection(s) {
+  _newConnection(s, { answerer = false } = {}) {
     this._teardown(s, 'replaced');
     s.gen++;
     const gen = s.gen;
@@ -126,8 +172,10 @@ export class SourceManager extends Emitter {
     s.stream = new MediaStream();
     s.hasVideo = s.hasAudio = false;
     s.videoFlowing = s.audioFlowing = false;
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
+    if (!answerer) {
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+    }
 
     pc.ontrack = (e) => {
       if (s.gen !== gen) return;
@@ -149,7 +197,7 @@ export class SourceManager extends Emitter {
       const st = pc.connectionState;
       if (st === 'connected') {
         clearTimeout(s.recoverTimer);
-        this._set(s, 'live', s.cfg.kind === 'whep' ? 'Receiving from WHEP endpoint.' : 'Receiving from contributor.');
+        this._set(s, 'live', { whep: 'Receiving from WHEP endpoint.', whip: 'Receiving from the encoder (WHIP).' }[s.cfg.kind] || 'Receiving from contributor.');
         this._sendTally(s, true);
       } else if (st === 'disconnected') {
         this._set(s, 'unstable', 'Connection interrupted. The browser is trying to recover it…');
@@ -165,6 +213,7 @@ export class SourceManager extends Emitter {
       }
     };
 
+    if (answerer) { this.emit('media', s); return { pc, gen }; }
     const dc = pc.createDataChannel('studio', { ordered: true });
     s.dc = dc;
     dc.onopen = () => {
@@ -202,9 +251,15 @@ export class SourceManager extends Emitter {
   disconnect(id) {
     const s = this.list.get(id);
     if (!s) return;
+    if (s.cfg.kind === 'peer' && s.cfg.mode === 'mailbox') s.mb?.send({ to: 'guest', type: 'bye' });
     this._teardown(s, 'disconnect');
     if (s.cfg.kind === 'youtube') this._ytClose(s);
-    this._set(s, 'offline', 'Disconnected by operator.');
+    if (s.cfg.kind === 'whip') {
+      s.blocked = true;
+      this._set(s, 'offline', 'Disconnected by operator. The encoder is refused until you click Accept encoder.');
+    } else if (s.cfg.kind === 'peer' && s.cfg.mode === 'mailbox') {
+      this._set(s, 'offline', 'Disconnected by operator. The guest can join again from their page, or click Reconnect to ask them.');
+    } else this._set(s, 'offline', 'Disconnected by operator.');
   }
 
   // Manual (copy-paste) signaling ------------------------------------------
@@ -217,7 +272,7 @@ export class SourceManager extends Emitter {
     await pc.setLocalDescription(offer);
     await waitForIceGathering(pc);
     if (s.gen !== gen) return null;
-    const code = await encodeSignal({ t: 'offer', role: 'contribute', slot: s.id, name: s.cfg.name, ice: this.ws.settings.ice, sdp: pc.localDescription.sdp });
+    const code = await encodeSignal({ t: 'offer', role: 'contribute', slot: s.id, name: s.cfg.name, ice: iceForPeer(this.ws.settings.ice), sdp: pc.localDescription.sdp });
     const link = new URL(`contribute.html#c=${code}`, location.href).toString();
     s.invite = { code, link, at: Date.now() };
     this._set(s, 'invited', 'Send the invite link to the contributor, then paste their reply code here.');
@@ -273,6 +328,14 @@ export class SourceManager extends Emitter {
     s.retries = 0;
     if (s.cfg.kind === 'whep') return this.connectWhep(id);
     if (s.cfg.kind === 'youtube') return this.connectYouTube(id);
+    if (this.usesMailbox(s)) {
+      s.blocked = false;
+      this._teardown(s, 'reconnect');
+      if (!s.mb || s.mb.state === 'replaced' || s.mb.state === 'closed') this._mbOpen(s);
+      if (s.cfg.kind === 'peer') s.mb?.send({ to: 'guest', type: 'rehello' });
+      this._mbState(s, s.mb, s.mb?.state);
+      return null;
+    }
     return this.createInvite(id);
   }
 
@@ -283,8 +346,180 @@ export class SourceManager extends Emitter {
       s.retries++;
       this._set(s, 'failed', `${why} Retrying in ${delay / 1000}s (attempt ${s.retries}).`);
       s.retryTimer = setTimeout(() => this.connectWhep(s.id), delay);
+    } else if (s.cfg.kind === 'whip') {
+      this._set(s, s.state, `${why} Waiting for the encoder to reconnect (OBS retries by itself).`);
+    } else if (s.cfg.kind === 'peer' && s.cfg.mode === 'mailbox') {
+      s.mb?.send({ to: 'guest', type: 'rehello' });
+      this._set(s, s.state, `${why} Asked the guest's page to reconnect.`);
     } else {
       this._set(s, s.state, `${why} With copy-paste signaling, reconnecting needs a new invite (click Reconnect).`);
+    }
+  }
+
+  // Mailbox: WHIP links and reusable guest links -----------------------------
+  // Each such source keeps a WebSocket open to its own box on the mailbox.
+
+  usesMailbox(s) { return s.cfg.kind === 'whip' || (s.cfg.kind === 'peer' && s.cfg.mode === 'mailbox'); }
+  mailbox() { return mailboxBase(this.ws.settings); }
+
+  whipUrl(id) {
+    const s = this.list.get(id), base = this.mailbox();
+    return s?.cfg.box && base ? `${base}/whip/${s.cfg.box}` : '';
+  }
+
+  guestLink(id) {
+    const s = this.list.get(id), base = this.mailbox();
+    if (!s?.cfg.box || !base) return '';
+    const p = new URLSearchParams({ mb: base, box: s.cfg.box, name: s.cfg.name });
+    return new URL(`contribute.html#${p}`, location.href).toString();
+  }
+
+  /** Reopen every mailbox connection, e.g. after the mailbox address changed. */
+  refreshMailbox() { for (const s of this.list.values()) if (!s.pc || this.usesMailbox(s)) this._mbOpen(s); }
+
+  /** Invite links: 'mailbox' (reusable link) or 'manual' (copy-paste codes). */
+  setPeerMode(id, mode) {
+    const s = this.list.get(id);
+    if (!s || s.cfg.kind !== 'peer' || s.cfg.mode === mode) return;
+    this.disconnect(id);
+    if (!s.cfg.box) Object.assign(s.cfg, { box: uid(12), key: uid(16) });
+    this.update(id, { mode });
+    this._mbOpen(s);
+    if (mode === 'manual') this._set(s, 'offline', 'Click Create invite to send a new invite link.');
+  }
+
+  /** A new WHIP or guest link; the old one stops working. */
+  newLink(id) {
+    const s = this.list.get(id);
+    if (!s || !this.usesMailbox(s)) return;
+    this._teardown(s, 'new-link');
+    this.update(id, { box: uid(12), key: uid(16) });
+    this._mbOpen(s);
+  }
+
+  _mbOpen(s) {
+    this._mbClose(s);
+    if (!this.usesMailbox(s)) return;
+    const base = this.mailbox();
+    if (!base) {
+      if (!s.pc) this._set(s, 'offline', 'Needs the mailbox address in Settings → Network.');
+      return;
+    }
+    if (!s.cfg.box) { Object.assign(s.cfg, { box: uid(12), key: uid(16) }); this.store.save(); }
+    const mb = new MailboxSocket(base, s.cfg.box, s.cfg.key);
+    s.mb = mb;
+    mb.on('state', (st) => this._mbState(s, mb, st));
+    mb.on('message', (m) => { if (s.mb === mb) this._mbMessage(s, m); });
+    this._mbState(s, mb, mb.state);
+  }
+
+  _mbClose(s) { s.mb?.close(); s.mb = null; }
+
+  _mbState(s, mb, st) {
+    if (!mb || s.mb !== mb) return;
+    // A running connection doesn't need the mailbox any more.
+    if (s.pc) { this.emit('change', s); return; }
+    if (st === 'open') {
+      if (s.blocked) this._set(s, 'offline', 'Disconnected by operator. The encoder is refused until you click Accept encoder.');
+      else this._set(s, 'waiting', WAITING[s.cfg.kind]);
+    } else if (st === 'replaced') {
+      this._set(s, 'offline', 'This source is open in another studio tab or window, which receives it now. Click Use it here to take it back.');
+    } else if (st === 'closed') {
+      this._set(s, 'offline', `Can't reach the mailbox at ${this.mailbox()}. Retrying…`);
+    } else {
+      this._set(s, 'offline', 'Connecting to the mailbox…');
+    }
+  }
+
+  _mbMessage(s, m) {
+    if (s.cfg.kind === 'whip') { this._onWhip(s, m); return; }
+    if (m.from !== 'guest') return;
+    if (m.type === 'hello') this._guestHello(s);
+    else if (m.type === 'answer') {
+      if (!s.pc || s.gen !== m.gen || s.pc.signalingState !== 'have-local-offer') return;
+      s.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }).catch((e) => this._set(s, 'failed', `The guest's answer was rejected: ${e.message}`));
+    } else if (m.type === 'bye') {
+      this._teardown(s, 'bye');
+      this._set(s, 'waiting', 'The guest left. They can rejoin with the same link.');
+    } else if (m.type === 'guest-left' && s.state !== 'live') {
+      this._teardown(s, 'bye');
+      this._set(s, 'waiting', 'The guest closed the page. They can rejoin with the same link.');
+    }
+  }
+
+  async _guestHello(s) {
+    const { pc, gen } = this._newConnection(s);
+    this._set(s, 'connecting', 'The guest is online. Connecting…');
+    try {
+      await pc.setLocalDescription(await pc.createOffer());
+      await waitForIceGathering(pc);
+      if (s.gen !== gen) return;
+      s.mb?.send({ to: 'guest', type: 'offer', sdp: pc.localDescription.sdp, gen, name: s.cfg.name, ice: iceForPeer(this.ws.settings.ice) });
+    } catch (e) {
+      if (s.gen === gen) this._set(s, 'failed', `Could not prepare the connection: ${e.message}`);
+    }
+  }
+
+  // WHIP: the encoder's offer arrives through the mailbox; we answer, and media
+  // flows from the encoder to this browser.
+  async _onWhip(s, m) {
+    const reply = (msg) => s.mb?.send({ sid: m.sid, ...msg });
+    if (m.type === 'whip-end') {
+      if (s.whipSid === m.sid) {
+        this._teardown(s, 'bye');
+        this._set(s, 'waiting', 'The encoder stopped streaming. Waiting for it to start again.');
+      }
+      return;
+    }
+    if (m.type === 'whip-candidate') {
+      if (!s.pc || s.whipSid !== m.sid) return;
+      let mid = null;
+      for (const line of String(m.frag || '').split(/\r?\n/)) {
+        if (line.startsWith('a=mid:')) mid = line.slice(6).trim();
+        else if (line.startsWith('a=candidate:')) {
+          s.pc.addIceCandidate({ candidate: line.slice(2).trim(), sdpMid: mid ?? s.pc.getTransceivers()[0]?.mid ?? '0' })
+            .catch((e) => console.warn('encoder candidate rejected', e));
+        }
+      }
+      return;
+    }
+    if (m.type !== 'whip-offer') return;
+    if (s.blocked) return reply({ type: 'whip-reject', status: 403, reason: 'This source is disconnected in the studio.' });
+    const sdp = String(m.sdp || '');
+    // Larix and other ice-lite encoders sometimes send an offer without any
+    // address; ask them to try again at once.
+    if (/^a=ice-lite/m.test(sdp) && !/^a=candidate:/m.test(sdp)) {
+      return reply({ type: 'whip-reject', status: 503, retryAfter: 1, reason: 'The offer has no network addresses. Try again.' });
+    }
+    try {
+      const { pc, gen } = this._newConnection(s, { answerer: true });
+      s.whipSid = m.sid;
+      this._set(s, 'connecting', 'Encoder connected. Negotiating media…');
+      await pc.setRemoteDescription({ type: 'offer', sdp });
+      for (const t of pc.getTransceivers()) t.direction = 'recvonly';
+      const answer = await pc.createAnswer();
+      // Let the encoder start the DTLS handshake: Chrome as DTLS client sends a
+      // large (post-quantum) hello that OBS's DTLS stack fails on at once.
+      answer.sdp = answer.sdp.replace(/^a=setup:active/gm, 'a=setup:passive');
+      await pc.setLocalDescription(answer);
+      const rejected = rejectedMedia(sdp, pc.localDescription.sdp);
+      if (rejected) {
+        const reason = `This browser can't receive the encoder's ${rejected}. Use Chrome or Edge for the studio, or set the encoder to H.264 Baseline.`;
+        this._teardown(s, 'rejected');
+        this._set(s, 'failed', reason);
+        return reply({ type: 'whip-reject', status: 415, reason });
+      }
+      await waitForIceGathering(pc, 3000);
+      if (s.gen !== gen) {
+        if (s.whipSid === m.sid) this._set(s, 'waiting', 'The encoder connection was replaced. Waiting for the encoder…');
+        return reply({ type: 'whip-reject', status: 409, reason: 'Superseded by a newer connection.' });
+      }
+      const c = sdpCodecs(pc.localDescription.sdp);
+      reply({ type: 'whip-answer', sdp: dropMdnsCandidates(pc.localDescription.sdp) });
+      this._set(s, 'connecting', `Encoder offer accepted (video ${c.video || 'none'}, audio ${c.audio || 'none'}). Connecting media…`);
+    } catch (e) {
+      this._set(s, 'failed', `Could not accept the encoder's offer: ${e.message}`);
+      reply({ type: 'whip-reject', status: 400, reason: e.message });
     }
   }
 

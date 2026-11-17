@@ -4,6 +4,14 @@
 
 export const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 
+// ICE servers handed out by the mailbox (STUN, and TURN when it is set up).
+// Used whenever no TURN server is entered in Settings.
+let AUTO = [];
+export function setAutoIceServers(list) { AUTO = Array.isArray(list) ? list : []; }
+// The ICE settings to send to another page (guest, receiver), with the
+// mailbox's servers included so that page uses the same TURN.
+export function iceForPeer(ice = {}) { return ice.turnUrl || !AUTO.length ? ice : { ...ice, auto: AUTO }; }
+
 export function buildIceServers(ice = {}) {
   const servers = [];
   const stun = (ice.stun ?? DEFAULT_STUN).split(/[\s,]+/).filter(Boolean);
@@ -14,6 +22,12 @@ export function buildIceServers(ice = {}) {
       username: ice.turnUser || undefined,
       credential: ice.turnPass || undefined,
     });
+  } else {
+    // Mailbox TURN entries only; the STUN list above already covers STUN.
+    for (const a of ice.auto || AUTO) {
+      const urls = [].concat(a.urls || []).filter((u) => /^turns?:/.test(u));
+      if (urls.length) servers.push({ urls, username: a.username, credential: a.credential });
+    }
   }
   return servers;
 }

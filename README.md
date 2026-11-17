@@ -8,7 +8,10 @@ Twitch's WebRTC ingest. Several outputs can run at once.
 
 All media work (decoding, compositing, mixing, encoding) happens in the
 operator's browser. The app is a set of static files: no build step, no
-dependencies, no backend, nothing to install. See
+dependencies, no media server, nothing to install. An optional small
+[mailbox](mailbox/README.md) (a free Cloudflare Worker) adds WHIP input from
+encoders such as OBS, reusable guest links and TURN; it only passes connection
+details, never video. See
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what that constraint costs, and
 [docs/TWITCH.md](docs/TWITCH.md) for the Twitch verification status.
 
@@ -19,7 +22,8 @@ only allow camera capture on HTTPS or `localhost`, so the pages are hosted
 rather than opened from disk. Any static host works the same way.
 
 Phones and laptops join as cameras by opening `contribute.html` from an invite
-link. OBS on the studio computer can also join through OBS Virtual Camera.
+link. Encoders such as OBS or Larix publish to a WHIP link from the studio
+(needs the mailbox).
 
 Locally, without hosting: `node tests/serve.mjs --port 8787` serves the files
 at http://localhost:8787 (any static file server works).
@@ -38,10 +42,17 @@ browser.
 
 ## Operator workflow
 
-1. **Add a source** (Sources tab): an invite link, a WHEP stream or a YouTube
-   video. For an invite link the studio creates a one-time link. Send it to the contributor; they press *Join studio* and send
-   back a reply code; paste it into the source card. Media then flows directly
-   between the two browsers. WHEP sources take a URL instead.
+1. **Add a source** (Sources tab): an invite link, a WHEP stream, a WHIP
+   encoder or a YouTube video. With the mailbox set up, an invite link is
+   reusable: send it once, and the guest presses *Join studio* and reconnects by
+   themselves after a refresh or a studio reload. Without it, the studio creates
+   a one-time link; the guest sends back a reply code that you paste into the
+   source card. Media flows directly between the two browsers either way. WHEP
+   sources take a URL instead.
+   **WHIP** sources give you a link to paste into OBS (Service: WHIP, Bearer
+   Token empty), Larix or a hardware encoder, from any network, with no port
+   forwarding. The encoder connects whenever it starts streaming while the
+   studio is open.
    **YouTube** sources take a YouTube link: Connect opens a small window with
    YouTube's own player; click Start there and allow sharing. That window sends
    just its player to the studio (Element Capture: no browser bar), so nothing is
@@ -106,7 +117,9 @@ you reconnect them.
 
 | File | Role |
 | --- | --- |
-| `js/sources.js` | Input connections: copy-paste invites, WHEP pull, YouTube windows, reconnection, tally |
+| `js/sources.js` | Input connections: invites (reusable or copy-paste), WHIP through the mailbox, WHEP pull, YouTube windows, reconnection, tally |
+| `js/mailbox.js` | WebSocket to the mailbox, used by the studio and the guest page |
+| `mailbox/` | The mailbox: Cloudflare Worker for WHIP input, reusable links and TURN credentials |
 | `js/compositor.js` | Programme/Preview rendering, transitions, scene layers, graphics |
 | `js/switcher.js` | Preview/Programme bus, Cut/Auto/T-bar/FTB, graphics keys |
 | `js/audio.js` | Web Audio mixer |
@@ -125,6 +138,8 @@ node tests/serve.mjs --port 8787 &   # plain static file server (Node built-ins 
 node tests/e2e.mjs          # 25 checks: inputs, multiview, cut/auto, composition, audio,
                             # receiver output (pixel-checked), WHIP, failure isolation, reload
 node tests/four-sources.mjs # load check with four 1080p contributors
+(cd mailbox && npx wrangler dev --port 8790) &
+node tests/mailbox.mjs      # 18 checks: WHIP input, reusable guest links, reloads
 ```
 
 Set `PLAYWRIGHT_DIR` to the folder containing the `playwright` package if it

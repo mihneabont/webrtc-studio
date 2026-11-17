@@ -8,6 +8,7 @@ import { Switcher } from './switcher.js';
 import { Compositor } from './compositor.js';
 import { OutputManager } from './outputs.js';
 import { Emitter, el, $ } from './util.js';
+import { setAutoIceServers } from './rtc.js';
 import { mountMonitors } from './ui/monitors.js';
 import { mountMultiview } from './ui/multiview.js';
 import { mountMixer } from './ui/mixer.js';
@@ -34,6 +35,32 @@ const updateTally = () => sources.setTally(switcher.pgmSources(), switcher.pvwSo
 switcher.on('change', updateTally);
 updateTally();
 switcher._syncAudio(0);
+
+// --- mailbox: ICE servers (STUN, and TURN when it is set up) -----------------
+// Used for every connection unless a TURN server is entered in Settings.
+app.mailboxIce = { state: 'off', turn: false };
+app.loadMailboxIce = async () => {
+  const base = sources.mailbox();
+  if (!base) { setAutoIceServers([]); app.mailboxIce = { state: 'off', turn: false }; app.ui.emit('settings'); return; }
+  try {
+    const r = await fetch(`${base}/ice`, { cache: 'no-store' });
+    const list = (await r.json()).iceServers;
+    setAutoIceServers(list);
+    app.mailboxIce = { state: 'ok', turn: list.some((x) => [].concat(x.urls).some((u) => /^turns?:/.test(u))) };
+  } catch {
+    app.mailboxIce = { state: 'error', turn: false };
+  }
+  app.ui.emit('settings');
+};
+app.loadMailboxIce();
+// TURN credentials are short-lived: fetch new ones every few hours.
+setInterval(() => app.loadMailboxIce(), 3 * 3600 * 1000);
+app.setMailboxUrl = (url) => {
+  store.ws.settings.mailboxUrl = url.trim().replace(/\/+$/, '');
+  store.save();
+  sources.refreshMailbox();
+  app.loadMailboxIce();
+};
 
 // --- UI --------------------------------------------------------------------
 mountMonitors(app, $('#monitors'));
