@@ -32,11 +32,12 @@ guests need no port forwarding: every side only makes outgoing connections.
    Actions** and add two repository secrets:
    - `CLOUDFLARE_API_TOKEN`: the token from step 2
    - `CLOUDFLARE_ACCOUNT_ID`: the ID from step 3
-5. In GitHub, open **Actions → Deploy mailbox → Run workflow**. When it
-   finishes, its summary shows the mailbox address.
-6. In the studio, paste that address under **Settings → Network → Mailbox**.
-   (Once it is known, it can also be built into `js/mailbox.js` as
-   `MAILBOX_URL`, so nobody has to enter it.)
+5. Push a change to `mailbox/` on `browser-only` (merging it counts), which
+   runs **Actions → Deploy mailbox**. When it finishes, its summary shows the
+   mailbox address.
+6. Put that address in `js/mailbox.js` as `MAILBOX_URL`, so every studio uses
+   it. (Settings → Network → Mailbox overrides it in one browser.) This
+   repository's mailbox is https://webrtc-studio-mailbox.mihneabont.workers.dev.
 
 From then on, every change to `mailbox/` on `browser-only` is published by
 itself.

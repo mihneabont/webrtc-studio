@@ -6,7 +6,7 @@
 import { Emitter } from './util.js';
 
 // The mailbox this site uses. Settings → Network can override it.
-export const MAILBOX_URL = '';
+export const MAILBOX_URL = 'https://webrtc-studio-mailbox.mihneabont.workers.dev';
 
 export function mailboxBase(settings) {
   return String(settings?.mailboxUrl || MAILBOX_URL || '').trim().replace(/\/+$/, '');
