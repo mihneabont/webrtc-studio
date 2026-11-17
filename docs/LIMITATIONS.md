@@ -3,10 +3,9 @@
 The app meets the "no media server, no backend, no helper app, static hosting"
 constraint. Media is captured, decoded, composited, mixed and encoded only in
 browsers, and travels browser-to-browser (or browser-to-ingest) over WebRTC.
-This page lists what that constraint costs, and separates **mandatory
-application infrastructure** (only a static file host) from **optional
-connection infrastructure** that makes connections easier or possible on hard
-networks.
+This page lists what that constraint costs. The only mandatory infrastructure
+is a static file host; STUN and TURN servers are optional and only help
+connections across hard networks.
 
 ## Infrastructure summary
 
@@ -15,11 +14,6 @@ networks.
 | Static file host (HTTPS) | **Yes** | No | Serves the HTML/JS/CSS |
 | STUN server | Optional (default: Google's public STUN) | No | Lets a browser learn its public address. Without it only same-network connections work |
 | TURN server | Optional | Relays encrypted packets, never decodes or mixes | Needed when a direct path is impossible (symmetric NAT, strict firewalls, some mobile and corporate networks) |
-| Signaling relay (`signaling-server/`) | Optional | No, only SDP text | Reusable links and automatic reconnection instead of copy-paste codes |
-| WHIP ingest for OBS (same helper) | Optional, needed only for OBS/WHIP encoder inputs | No, only the SDP text | OBS publishes with an HTTP POST, which a web page cannot receive. The helper hands the offer to the studio page and returns its answer; media then flows OBS → studio browser directly |
-| WHIP/WHEP CORS forwarder (same helper) | Optional | No, only the SDP HTTP request | For ingest endpoints that reject requests from web pages |
-| RTMP output (same helper + ffmpeg) | Optional, needed only for RTMP outputs | **Yes**, the programme, on the studio computer | Browsers can't speak RTMP. The page records the programme and the helper's ffmpeg pushes it to the RTMP server |
-| SRT input (same helper + ffmpeg) | Optional, needed only for SRT sources | **Yes**, that source, on the studio computer | Browsers can't receive SRT (raw UDP). The helper's ffmpeg listens for the sender, re-encodes to H.264 + Opus and publishes it to the studio page with WHIP |
 
 ## 1. Signaling without a server
 
@@ -36,12 +30,8 @@ network where a direct path exists, but:
   interruption, which ICE recovers by itself), reconnecting needs a new invite;
 - the studio cannot reconnect contributors automatically after it reloads.
 
-**Smallest compromise:** the optional relay in `signaling-server/server.mjs`
-(about 200 lines of Node with no dependencies). It forwards only small JSON
-messages over Server-Sent Events. With it, contributor and receiver links are
-reusable and both sides reconnect automatically, including after a studio
-reload (tested in `tests/relay.mjs`). Media still never touches it. It is open
-by design: deploy it privately; room IDs are random 64-bit values.
+The contributor page remembers which invites this browser already answered
+and warns when a used link is opened again.
 
 ## 2. Network topology (NAT and firewalls)
 
@@ -54,7 +44,7 @@ or mix the media, so it doesn't violate the no-media-server rule, but it is
 infrastructure someone must run or rent (coturn, Cloudflare, Twilio, Metered).
 
 Notes:
-- STUN/TURN settings are sent inside invite links and relay offers so the
+- STUN/TURN settings are sent inside invite links so the
   remote side uses the same servers. Long-lived TURN passwords would therefore
   reach contributors: use short-lived TURN credentials.
 - Invite codes contain the studio's network candidates (IP addresses), like
@@ -67,85 +57,22 @@ Notes:
 
 A web page can only POST to an ingest URL if that server answers with CORS
 headers allowing it (and exposes the `Location` header). Many WHIP servers do;
-some don't. When the browser blocks the request, the output says so. The
-smallest compromise is the forwarder in the same optional helper: it forwards
-only the SDP POST/DELETE, and the media connection still goes directly from the
-browser to the ingest server. It only forwards to hosts listed in
-`FORWARD_ALLOW` (default: Twitch's WebRTC ingest host).
+some don't. When the browser blocks the request, the output or source says
+so; such an endpoint can't be used from a web page.
 
-## 3b. OBS and other WHIP encoders as inputs
+## 4. What a browser can't do
 
-A browser page can't accept incoming HTTP requests, so OBS can't publish to
-the studio directly. The helper's `/whip-in/<room>/<source>` route accepts
-OBS's WHIP POST, relays the SDP offer to the studio page, and returns the
-studio's answer (201 + Location; DELETE ends the session). The studio checks
-the bearer token. The helper never sees media. Trickle ICE (PATCH) isn't
-supported; OBS sends all candidates in its offer, so this doesn't matter for
-OBS. OBS must use a codec the studio browser can decode in WebRTC: H.264 is
-safe; HEVC and AV1 depend on the browser and hardware. Tested with a browser
-acting as the WHIP encoder (`tests/obs.mjs`), not with OBS itself.
+- **RTMP and SRT.** Browsers can only send and receive live media over WebRTC,
+  so RTMP outputs and SRT inputs aren't offered. Use a platform's WHIP ingest
+  (Twitch has one) or a WHIP/WHEP-capable media server in between.
+- **Encoders that publish with WHIP (OBS).** A web page can't accept incoming
+  HTTP requests, so OBS can't publish to the studio directly. OBS on the studio
+  computer can join through OBS Virtual Camera on a contributor page, or
+  publish to a WHIP server that the studio then plays with WHEP.
+- **YouTube** sources need Chrome or Edge 132 or later (Element Capture) and a
+  pop-up window per video.
 
-## 3c. RTMP output
-
-Browsers can only send live media over WebRTC, so RTMP (YouTube, Twitch,
-Facebook and most platforms) needs something outside the page. The RTMP
-output records the programme with `MediaRecorder` in 250 ms pieces and posts
-them to the helper on the same computer (`/rtmp`), which feeds them to ffmpeg.
-H.264 from the browser is passed through unchanged; audio is converted from
-Opus to AAC. Browsers that can't record H.264 (Firefox, open-source Chromium)
-get the video re-encoded by ffmpeg, which costs CPU. This is the one place
-where the helper handles media, and it only does so on the studio computer.
-
-- Expect 1 to 3 s more delay than the WebRTC outputs.
-- The keyframe interval is requested as 2 s (`videoKeyFrameIntervalDuration`),
-  which recent Chrome honours; older browsers may produce longer intervals.
-- Bitrate changes apply on the next start, not live.
-- If the upload or the RTMP server can't keep up, the card shows how far
-  behind the stream is; pieces are queued in the page, not dropped.
-- Tested (`tests/rtmp.mjs`) against a local ffmpeg RTMP listener with the
-  re-encode path, and the pass-through path with an H.264 file; not yet
-  against a real platform.
-
-## 3d. SRT input
-
-A web page can't open UDP sockets, so it can't receive SRT. An *SRT (via
-helper)* source asks the helper (`/srt`) to listen on a UDP port with ffmpeg.
-When a sender connects (mode Caller), ffmpeg re-encodes the stream to H.264
-Baseline + Opus and publishes it with WHIP to the helper's own `/whip-in`, which
-hands it to the studio page exactly like an OBS source. When the sender stops,
-ffmpeg exits and the helper listens again, so the sender can reconnect at any
-time.
-
-- Any codec the sender uses works (H.264, HEVC, AAC...), because ffmpeg always
-  re-encodes, adding about 0.5 to 1 s of delay on top of the SRT latency. To
-  keep that cheap, ffmpeg decodes on the GPU when it can (`-hwaccel auto`),
-  encodes with the first hardware H.264 encoder that passes a test encode
-  (NVENC, Intel Quick Sync, AMD AMF; x264 `veryfast` otherwise), and scales
-  the source down to the programme height first. With Quick Sync, decode,
-  scale and encode all stay on the graphics chip; if that fails for a sender,
-  the helper falls back to GPU decode + CPU scaling + hardware encode.
-  Measured on an i5-12450H, 1080p HEVC in, 720p out (100% = one core): x264
-  103%, hardware encode only 46%, all on Quick Sync 22%. The source card shows
-  which path is in use.
-- *Pass through* (a per-source option) sends the sender's H.264 on unchanged,
-  about 3% of a core. It needs H.264 without B-frames, and it is not scaled.
-- The studio page itself needs the full-quality source: it composites the
-  programme from it, so a lower-quality copy for the browser would also lower
-  every output. The Preview monitor is already drawn at 960 px and 15 fps.
-- ffmpeg's WHIP muxer stops answering ICE connectivity checks once connected,
-  and Chrome drops such a connection after about 30 s. The helper therefore
-  puts a small UDP relay between ffmpeg and the browser that forwards the
-  media and answers those checks for ffmpeg. It also adds the a=ssrc lines
-  ffmpeg leaves out for its retransmission stream, which Chrome otherwise
-  rejects.
-- Needs ffmpeg 8 or later with SRT support (the installer's Gyan build has it).
-- Senders on other networks need UDP port forwarding on the router; the
-  installer's firewall rule allows UDP 9000-9099 from anywhere, so set an SRT
-  passphrase in that case.
-- Tested on Windows with ffmpeg 9.0 as both sender and converter (H.264 and
-  HEVC input, AAC audio), not yet with Larix or a hardware encoder.
-
-## 4. Codecs and encoder control
+## 5. Codecs and encoder control
 
 - Twitch and many WHIP servers require **H.264**. Chrome, Edge and Safari can
   encode it; Firefox needs its OpenH264 plugin; open-source Chromium builds
@@ -158,7 +85,7 @@ time.
 - Each output encodes the programme separately, so every additional output
   adds a full encode's worth of CPU (or hardware encoder) load.
 
-## 5. Performance
+## 6. Performance
 
 Decoding several 1080p feeds and compositing at 1080p depends heavily on the
 GPU, which the browser uses for video decode and canvas drawing. The app
@@ -175,7 +102,7 @@ below a production setup and the number says little about real hardware; the
 four-feed 1080p target has **not** been verified on capable hardware yet.
 `tests/four-sources.mjs` repeats the measurement on any machine.
 
-## 6. The browser must stay in the foreground
+## 7. The browser must stay in the foreground
 
 Browsers throttle hidden tabs. The render loop uses a Web Worker timer, which
 browsers don't throttle like page timers, but some browsers may still slow
@@ -183,7 +110,7 @@ video decoding in a background tab. The studio shows a warning when its tab is
 hidden. Use a dedicated window and keep it visible. If the browser closes, the
 production stops (as the requirements allow).
 
-## 7. Audio
+## 8. Audio
 
 - Browsers start audio only after a user gesture; until the operator clicks
   anywhere, the programme audio is silent and the studio says so.
@@ -193,7 +120,7 @@ production stops (as the requirements allow).
 - Contributor microphones use the browser's echo cancellation and noise
   suppression.
 
-## 8. Persistence and credentials
+## 9. Persistence and credentials
 
 Settings live in this browser's localStorage (images in IndexedDB), per
 browser profile and origin. Export/Import moves a workspace between machines
@@ -202,14 +129,14 @@ stream keys are by default kept only for the session; they can be saved
 encrypted with a passphrase (PBKDF2 + AES-GCM, passphrase never stored) or, if
 the operator chooses, unencrypted. TURN credentials are saved unencrypted.
 
-## 9. Programme format changes
+## 10. Programme format changes
 
 Changing the programme resolution while outputs are live changes the encoded
 resolution mid-stream. Browser receivers adapt; ingest platforms may not. The
 studio asks for confirmation when outputs are live. For WHIP/Twitch outputs the
 encoder is told to keep resolution and lower frame rate under pressure.
 
-## 10. What was and wasn't tested
+## 11. What was and wasn't tested
 
 Tested automatically in Chromium 141 (headless, Linux) with genuine WebRTC
 connections between separate pages: every acceptance criterion except Twitch.

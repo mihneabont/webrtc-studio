@@ -1,14 +1,11 @@
 // Right-hand side panel: Sources, Scenes, Graphics, Outputs, Settings.
-import { el, fmtKbps, fmtRes, fmtMs, uid, relayWorksRemotely } from '../util.js';
+import { el, fmtKbps, fmtRes, fmtMs } from '../util.js';
 import { SOURCE_STATES, stateLabel } from '../sources.js';
 import { codecSupported } from '../rtc.js';
-import { field, text, num, select, check, linkBox, statLine, CardList, SECRET } from './forms.js';
+import { field, text, select, check, linkBox, statLine, CardList, SECRET } from './forms.js';
 import { parseYouTube, fmtClock, youTubeSupported } from '../youtube.js';
 import { mountScenesTab, mountGraphicsTab } from './scenes-panel.js';
 import { mountOutputsTab } from './outputs-panel.js';
-import { HELPER_PORT, downloadHelperInstaller } from './helper-install.js';
-import { mountHelperPanel } from './helper-panel.js';
-
 
 const TABS = { sources: 'Sources', scenes: 'Scenes', graphics: 'Graphics', outputs: 'Outputs', settings: 'Settings' };
 
@@ -46,15 +43,12 @@ export function mountSide(app, root) {
 
 // ---------------------------------------------------------------------------
 // Source types offered in the Sources tab, in this order. Icons are 24x24 line
-// drawings (SVG path data), drawn in the text colour. WHEP and WHIP are a globe
-// with an arrow: WHEP plays from a server (arrow down), WHIP is an encoder
-// publishing (arrow up).
+// drawings (SVG path data), drawn in the text colour. WHEP is a globe with an
+// arrow down: it plays from a server.
 const GLOBE = ['M17 10a7 7 0 1 1-14 0a7 7 0 1 1 14 0', 'M3 10h14', 'M10 3a10.5 10.5 0 0 1 0 14a10.5 10.5 0 0 1 0-14'];
 const SOURCE_KINDS = {
   peer: { label: 'Invite link', icon: ['M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5', 'M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5'] },
   whep: { label: 'WHEP', icon: [...GLOBE, 'M19 14v7', 'M16 18l3 3 3-3'] },
-  obs: { label: 'WHIP (via helper)', icon: [...GLOBE, 'M19 21v-7', 'M16 17l3-3 3 3'] },
-  srt: { label: 'SRT (via helper)', icon: ['M12 13v8', 'M9 21h6', 'M8.5 9.5a5 5 0 0 1 7 0', 'M5.5 6.5a9 9 0 0 1 13 0', 'M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'] },
   youtube: { label: 'YouTube', icon: ['M2.5 8.5a3 3 0 0 1 2.6-2.9C7.4 5.2 9.7 5 12 5s4.6.2 6.9.6a3 3 0 0 1 2.6 2.9 30 30 0 0 1 0 7 3 3 0 0 1-2.6 2.9c-2.3.4-4.6.6-6.9.6s-4.6-.2-6.9-.6a3 3 0 0 1-2.6-2.9 30 30 0 0 1 0-7z', 'M10 9.5v5l4.5-2.5z'] },
 };
 
@@ -67,7 +61,7 @@ function kindIcon(paths) {
 }
 
 function mountSourcesTab(app, root) {
-  const { sources, switcher, store } = app;
+  const { sources, switcher } = app;
   const drafts = new Map();
   const errors = new Map();
 
@@ -84,9 +78,7 @@ function mountSourcesTab(app, root) {
   const add = () => {
     const s = sources.add({ name: nameIn.value.trim(), kind });
     nameIn.value = '';
-    if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') invite(s);
-    if (s.cfg.kind === 'obs' && store.ws.settings.signalingUrl) sources.reconnect(s.id);
-    if (s.cfg.kind === 'srt' && store.ws.settings.signalingUrl) sources.startSrt(s.id);
+    if (s.cfg.kind === 'peer') invite(s);
   };
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
 
@@ -96,7 +88,7 @@ function mountSourcesTab(app, root) {
   const empty = el('div', { class: 'empty-state' },
     kindIcon(['M3 8a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M16 10l5-3v10l-5-3']),
     el('div', { class: 'empty-title' }, 'Add a source to start'),
-    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, connect an encoder such as OBS or any camera that supports SRT or WebRTC. '
+    el('div', {}, 'Pick a type above, give it a name and click Add: send an invite link to a phone or computer, play a stream from a WHEP server, or play a YouTube video. '
       + 'Each source then appears here and in the multiview, ready to put on Preview and Programme.'));
   root.append(
     el('div', { class: 'section-title' }, 'Add source'),
@@ -111,17 +103,11 @@ function mountSourcesTab(app, root) {
       b.classList.toggle('on', b.dataset.kind === kind);
       b.setAttribute('aria-checked', String(b.dataset.kind === kind));
     }
-    const relay = relayWorksRemotely(store.ws.settings.signalingUrl);
-    const helper = app.helperInfo ? '' : ' The helper is not running on this computer yet: the new source shows how to install it.';
     const text = {
-      peer: relay
-        ? 'Send someone a link: they open it in a phone or computer browser and allow camera and microphone. The link is reusable and reconnects by itself through the signaling relay set in Settings. Video goes directly from their browser to this one.'
-        : 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
-      obs: `For encoders that publish with WHIP: OBS, vMix and hardware encoders. The source gives you a server URL and a token to paste into the encoder. Needs the helper on this computer, which only passes the connection on: video goes straight from the encoder to this browser.${helper}`,
-      whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. No helper needed when the server accepts requests from web pages.',
+      peer: 'Send someone a link: they open it in a phone or computer browser, allow camera and microphone, and send back a reply code that you paste here. No server or install needed; video goes directly from their browser to this one.',
+      whep: 'Play a stream from a WHEP server, such as MediaMTX, Cloudflare Stream or Millicast. Paste its WHEP URL, and a token if it needs one. The server must accept requests from web pages (CORS).',
       youtube: 'Play a YouTube video as a source. Paste its link and click Connect: a small window opens with YouTube\'s own player; click Start there and choose Allow. The studio receives just the video, with its own sound on its own fader (programme only, not your speakers), and nothing is downloaded. Keep the window open. Then play, pause, seek and loop it from the source card. Only use videos you have the rights to broadcast.'
         + (youTubeSupported() ? '' : ' Not available in this browser (Firefox): YouTube sources need Chrome or Edge.'),
-      srt: `For SRT senders: OBS, vMix and hardware encoders. The helper on this computer listens on a UDP port and converts the stream to WebRTC for this page with ffmpeg, so any codec works. Adds about half a second to a second of delay and uses some CPU.${helper}`,
     }[kind];
     intro.replaceChildren(text);
   }
@@ -144,7 +130,7 @@ function mountSourcesTab(app, root) {
       el('button', { class: 'btn sm', onclick: () => switcher.setPreview({ kind: 'source', id: s.id }) }, 'Preview'));
 
     const state = el('div', { class: 'card-state' }, stateLabel(s),
-      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'obs' ? ' · WHIP via helper' : s.cfg.kind === 'srt' ? ' · SRT via helper' : s.cfg.kind === 'youtube' ? ' · YouTube' : s.cfg.mode === 'relay' ? ' · invite link, relay' : ' · invite link, copy-paste',
+      s.cfg.kind === 'whep' ? ' · WHEP' : s.cfg.kind === 'youtube' ? ' · YouTube' : ' · invite link',
       s.info?.device ? ` · ${s.info.device}` : '',
       s.pc && s.paused?.video ? el('span', { class: 'paused-chip' }, 'camera off') : null,
       s.pc && s.paused?.audio ? el('span', { class: 'paused-chip' }, 'mic off') : null);
@@ -154,7 +140,7 @@ function mountSourcesTab(app, root) {
 
     const actions = [];
     const live = !!s.pc;
-    if (s.cfg.kind === 'peer' && s.cfg.mode === 'manual') {
+    if (s.cfg.kind === 'peer') {
       if (s.state === 'invited' && s.invite) {
         const ta = el('textarea', { rows: 3, placeholder: 'Paste the reply code from the contributor page' });
         ta.value = drafts.get(s.id) || '';
@@ -175,15 +161,6 @@ function mountSourcesTab(app, root) {
       }
     } else if (s.cfg.kind === 'youtube') {
       actions.push(...ytActions(s));
-    } else if (s.cfg.kind === 'srt') {
-      actions.push(...srtActions(s));
-    } else if (s.cfg.kind === 'obs') {
-      actions.push(...obsActions(s, live));
-    } else if (s.cfg.kind === 'peer') {
-      actions.push(el('div', { class: 'small muted' }, 'Contributor link (reusable; reconnects automatically):'), linkBox(sources.relayLink(s.id), 'Copy link'),
-        el('div', { class: 'btn-row' },
-          el('button', { class: 'btn primary', onclick: () => sources.reconnect(s.id) }, 'Reconnect'),
-          live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
     } else {
       const url = text(s.cfg.whepUrl, (v) => sources.update(s.id, { whepUrl: v.trim() }), { type: 'url', placeholder: 'https://…/whep/…' });
       const tok = el('input', { ...SECRET, placeholder: 'Bearer token (optional, not saved)', value: s.token || '' });
@@ -193,13 +170,9 @@ function mountSourcesTab(app, root) {
         live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect') : null));
     }
 
-    const modeOpts = relayWorksRemotely(store.ws.settings.signalingUrl) && s.cfg.kind === 'peer'
-      ? field('Signaling', select({ manual: 'Copy-paste codes', relay: 'Signaling relay' }, s.cfg.mode, (v) => { sources.disconnect(s.id); sources.update(s.id, { mode: v }); }))
-      : null;
     const settings = el('details', {}, el('summary', {}, 'Source settings'),
       el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
         field('Name', text(s.cfg.name, (v) => v.trim() && sources.update(s.id, { name: v.trim() }))),
-        modeOpts,
         el('div', { class: 'btn-row' }, el('button', { class: 'btn danger sm', onclick: () => {
           if (confirm(`Remove "${s.cfg.name}"? Its connection is closed and its configuration deleted.`)) sources.remove(s.id);
         } }, 'Remove source'))));
@@ -207,74 +180,6 @@ function mountSourcesTab(app, root) {
     return el('div', { class: `card ${s.state === 'live' ? 'live' : s.state === 'failed' ? 'failed' : ''}`, dataset: { id: s.id } },
       head, state, detail, err, stats, ...actions, settings);
   });
-
-  // A helper reached as localhost gives OBS on this computer a working URL, but a
-  // phone needs this computer's network address instead.
-  function phoneUrlField(s) {
-    const url = sources.obsUrl(s.id);
-    const lan = app.helperInfo?.lan?.[0];
-    if (!url || !lan || !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(url)) return [];
-    return [field('Server for a phone or another computer', linkBox(url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, `$1${lan}`), 'Copy'))];
-  }
-
-  // Without a reachable helper, returns what to show instead of the card's
-  // controls (why it's needed, install, check again); otherwise null.
-  function helperGuard(...why) {
-    const st = store.ws.settings;
-    if (!st.signalingUrl) {
-      const helper = app.helperOrigin;
-      return [el('div', { class: 'note warn' }, ...why),
-      helper
-        ? el('div', { class: 'btn-row' }, el('button', { class: 'btn primary', onclick: () => {
-          st.signalingUrl = helper; store.save(); app.setupRelay(); app.ui.emit('settings');
-        } }, `Use the helper at ${helper}`))
-        : el('div', {},
-          el('div', { class: 'btn-row' },
-            el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
-            el('button', { class: 'btn', onclick: async (e) => {
-              e.target.textContent = 'Looking…';
-              if (!(await app.detectHelper())) { e.target.textContent = 'Not found. Check again'; }
-            } }, 'Check again')),
-          el('div', { class: 'small muted' },
-            'Downloads a small setup file. Run it once: it installs Node.js if needed, starts the helper in the background on this computer and again at every sign-in, and asks once for admin so your phone and OBS on this network can connect. Then click Check again. ',
-            `On macOS or Linux: install Node.js and run node signaling-server/server.mjs --port ${HELPER_PORT}.`))];
-    }
-    if (app.relay?.state !== 'open') {
-      return [el('div', { class: 'note warn' }, `Can't reach the helper at ${st.signalingUrl}. It may not be running, or it was removed.`),
-        el('div', { class: 'btn-row' },
-          el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
-          el('button', { class: 'btn', onclick: () => app.setupRelay() }, 'Check again'),
-          el('button', { class: 'btn', title: 'Stop using this helper address', onclick: () => {
-            st.signalingUrl = ''; store.save(); app.helperOrigin = null; app.setupRelay(); app.ui.emit('settings'); app.detectHelper();
-          } }, 'Forget helper'))];
-    }
-    return null;
-  }
-
-  function obsActions(s, live) {
-    const guard = helperGuard(
-      'OBS sends its stream with an HTTP request, which a web page cannot receive. This needs the small optional helper (signaling-server/server.mjs) running next to the studio. ',
-      'It only passes the connection details on; the video goes straight from OBS to this browser.');
-    if (guard) return guard;
-    return [
-      el('div', { class: 'small muted' }, 'In OBS: Settings → Stream → Service: WHIP. Paste these two values:'),
-      field('Server', linkBox(sources.obsUrl(s.id), 'Copy')),
-      ...phoneUrlField(s),
-      field('Bearer Token', linkBox(s.cfg.token, 'Copy')),
-      el('div', { class: 'small muted' }, 'Use an H.264 encoder in OBS (Settings → Output), keyframe interval 1-2 s, up to about 8000 kb/s. Start Streaming in OBS and the source connects by itself.'),
-      el('div', { class: 'btn-row' },
-        live ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Disconnect')
-          : s.state !== 'waiting' ? el('button', { class: 'btn primary', onclick: () => sources.reconnect(s.id) }, 'Accept encoder') : null,
-        el('button', { class: 'btn sm', title: 'Invalidate the old token', onclick: () => { sources.update(s.id, { token: uid(12) }); } }, 'New token')),
-    ];
-  }
-
-  // The address a phone or encoder on the home network can reach (not a
-  // Hyper-V or WSL virtual adapter).
-  function lanAddress() {
-    const lan = app.helperInfo?.lan || [];
-    return lan.find((a) => a.startsWith('192.168.')) || lan.find((a) => a.startsWith('10.')) || lan[0] || null;
-  }
 
   // YouTube: a link and Connect, then the player's controls and a progress bar.
   function ytActions(s) {
@@ -321,51 +226,6 @@ function mountSourcesTab(app, root) {
     return out;
   }
 
-  function srtActions(s) {
-    const guard = helperGuard(
-      'A web page can\'t receive SRT. The helper on this computer listens for the SRT sender and converts the stream to WebRTC for this page with ffmpeg. ',
-      'That adds about half a second to a second of delay.');
-    if (guard) return guard;
-    const info = app.helperInfo;
-    if (info && !info.features?.includes('srt')) {
-      return [el('div', { class: 'note warn' }, info.ffmpeg
-        ? 'The ffmpeg on this computer is too old for SRT input. Run Install helper again, or update it with: winget upgrade Gyan.FFmpeg.Essentials'
-        : 'SRT input needs ffmpeg on this computer. Run Install helper again; it installs ffmpeg.'),
-      el('div', { class: 'btn-row' },
-        el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)'),
-        el('button', { class: 'btn', onclick: () => app.detectHelper() }, 'Check again'))];
-    }
-    const listening = !!s.srt;
-    const change = (patch) => { sources.update(s.id, patch); if (s.srt) sources.startSrt(s.id); };
-    const port = num(s.cfg.srtPort, (v) => change({ srtPort: Math.round(v) }), { min: 1024, max: 65535, style: { width: '90px' } });
-    const latency = num(s.cfg.srtLatency, (v) => change({ srtLatency: Math.round(v) }), { min: 20, max: 8000, step: 10, style: { width: '90px' } });
-    const pass = text(s.cfg.srtPass || '', (v) => change({ srtPass: v.trim() }), { placeholder: 'Optional, 10-79 characters', autocomplete: 'off' });
-    const lan = lanAddress();
-    const st = s.srt?.info;
-    const status = !listening ? 'Not listening.'
-      : !st ? 'Starting…'
-        : st.state === 'error' ? 'The helper could not listen on this port.'
-          : `${st.state === 'listening' ? `Listening on UDP port ${st.port}` : 'Receiving'}${st.input?.video ? ` · input ${st.input.video}${st.input.audio ? ` + ${st.input.audio.toUpperCase()}` : ''}` : ''}${!st.encoder ? '' : /^pass-through/.test(st.encoder) ? ' · video passed through unchanged' : ` · converted with ${st.encoder}, up to ${st.height}p`}`;
-    return [
-      el('div', { class: 'small muted' }, 'In the SRT sender (OBS, vMix, a hardware encoder) choose mode Caller and enter:'),
-      lan ? field('Address from a phone or another computer', linkBox(`srt://${lan}:${s.cfg.srtPort}`, 'Copy')) : null,
-      field('Address from this computer', linkBox(`srt://127.0.0.1:${s.cfg.srtPort}`, 'Copy')),
-      el('div', { class: 'btn-row' }, field('Port (UDP)', port), field('Latency (ms)', latency)),
-      field('Passphrase', pass, 'If you set one, enter the same passphrase in the sender.'),
-      field('Video', select({ convert: 'Convert (any sender, scaled to the programme)', passthrough: 'Pass through (lowest CPU, H.264 senders)' }, s.cfg.srtVideo || 'convert', (v) => change({ srtVideo: v })),
-        (s.cfg.srtVideo || 'convert') === 'passthrough'
-          ? 'The sender\'s video goes to the studio unchanged: almost no CPU. The sender must send H.264 without B-frames (OBS defaults are fine) at no more than the programme size. If the picture stutters or stays black, switch back to Convert.'
-          : 'Works with any codec (HEVC, H.264). Uses the graphics chip when it can.'),
-      el('div', { class: 'small muted' },
-        `Use the same latency in the sender (${s.cfg.srtLatency} ms). `,
-        `From outside your network, forward UDP port ${s.cfg.srtPort} on your router to this computer.`),
-      el('div', { class: `card-detail ${st?.state === 'error' ? 'bad' : ''}` }, status),
-      el('div', { class: 'btn-row' },
-        listening ? el('button', { class: 'btn', onclick: () => sources.disconnect(s.id) }, 'Stop listening')
-          : el('button', { class: 'btn primary', onclick: () => sources.startSrt(s.id) }, 'Start listening')),
-    ];
-  }
-
   function statsFor(s) {
     const st = s.stats;
     if (!st) return '';
@@ -404,8 +264,6 @@ function mountSourcesTab(app, root) {
     if (slot) slot.replaceChildren(statsFor(s));
   });
   switcher.on('change', () => { for (const s of sources.all()) cards.refresh(s); });
-  app.ui.on('settings', renderAll);
-  app.ui.on('relay', renderAll);
   renderAll();
 }
 
@@ -415,10 +273,6 @@ function mountSettingsTab(app, root) {
   const st = store.ws.settings;
   const save = () => store.save();
   const ice = st.ice;
-
-  const sigUrl = text(st.signalingUrl, (v) => { st.signalingUrl = v.trim().replace(/\/+$/, ''); save(); app.setupRelay(); app.ui.emit('settings'); },
-    { type: 'url', placeholder: 'Optional, e.g. https://signal.example.com' });
-  const room = el('input', { type: 'text', value: st.room, readOnly: true, class: 'mono' });
 
   const fileIn = el('input', { type: 'file', accept: 'application/json', class: 'hidden' });
   fileIn.addEventListener('change', async () => {
@@ -436,11 +290,10 @@ function mountSettingsTab(app, root) {
     ['Secure context', window.isSecureContext ? 'yes' : 'no'],
   ];
 
-  mountHelperPanel(app, root);
   root.append(
-    el('div', { class: 'section-title' }, 'Connection infrastructure (all optional)'),
+    el('div', { class: 'section-title' }, 'Network (optional)'),
     el('div', { class: 'note' },
-      'This app needs only static hosting. The items below are optional helpers for difficult networks. ',
+      'This app needs only static hosting: everything runs in the browser. ',
       'STUN discovers public addresses; TURN relays media when two networks cannot connect directly (strict NAT/firewalls). ',
       'Without TURN, some contributor networks will not connect at all.'),
     el('div', { class: 'card' },
@@ -451,14 +304,6 @@ function mountSettingsTab(app, root) {
         field('TURN password', (() => { const i = el('input', { ...SECRET, value: ice.turnPass }); i.addEventListener('change', () => { ice.turnPass = i.value; save(); }); return i; })())),
       check('Force relay (send everything through TURN)', ice.forceRelay, (v) => { ice.forceRelay = v; save(); }),
       el('div', { class: 'small muted' }, 'ICE settings apply to new connections. TURN credentials are stored in this browser.')),
-    el('div', { class: 'card' },
-      field('Signaling relay URL', sigUrl, 'Optional. Enables reusable contributor/receiver links and automatic reconnection. Carries only SDP text, never media. See signaling-server/ in the project.'),
-      field('Room', el('div', { class: 'linkbox' }, room, el('button', { class: 'btn sm', onclick: () => {
-        if (!confirm('Generate a new room? Existing relay links stop working.')) return;
-        st.room = uid(8); room.value = st.room; save(); app.setupRelay(); app.ui.emit('settings');
-      } }, 'New room'))),
-      field('WHIP/WHEP CORS forwarder', text(st.whipProxy, (v) => { st.whipProxy = v.trim().replace(/\/+$/, ''); save(); }, { type: 'url', placeholder: 'Optional, e.g. https://signal.example.com' }),
-        'Only needed if an ingest endpoint does not allow browser requests (CORS). Forwards the SDP request; media still goes directly from this browser to the endpoint.')),
 
     el('div', { class: 'section-title' }, 'Production'),
     el('div', { class: 'card' },

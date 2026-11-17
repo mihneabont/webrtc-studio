@@ -1,7 +1,6 @@
 // Outputs tab: programme format, receivers, WHIP and Twitch outputs.
-import { el, fmtKbps, fmtRes, fmtMs, relayWorksRemotely } from '../util.js';
-import { OUTPUT_STATES, TWITCH, defaultKbps, rtmpFormat } from '../outputs.js';
-import { downloadHelperInstaller } from './helper-install.js';
+import { el, fmtKbps, fmtRes, fmtMs } from '../util.js';
+import { OUTPUT_STATES, TWITCH, defaultKbps } from '../outputs.js';
 import { sealSecret, openSecret } from '../store.js';
 import { field, text, num, select, check, linkBox, statLine, CardList, SECRET } from './forms.js';
 
@@ -24,7 +23,6 @@ export function mountOutputsTab(app, root, setBadge) {
     store.save();
     compositor.applyFormat();
     outputs.applyEncodingAll();
-    if ('height' in patch) app.sources.restartSrtForFormat();
     renderFormat();
     cards.render(outputs.all());
   };
@@ -45,14 +43,13 @@ export function mountOutputsTab(app, root, setBadge) {
     el('div', { class: 'card' }, el('div', { class: 'btn-row' },
       el('button', { class: 'btn sm', onclick: () => { outputs.add({ kind: 'peer' }); cards.render(outputs.all()); } }, '+ Browser receiver'),
       el('button', { class: 'btn sm', onclick: () => { outputs.add({ kind: 'whip' }); cards.render(outputs.all()); } }, '+ WHIP endpoint'),
-      el('button', { class: 'btn sm', onclick: () => { outputs.add({ kind: 'twitch' }); cards.render(outputs.all()); } }, '+ Twitch'),
-      el('button', { class: 'btn sm', onclick: () => { outputs.add({ kind: 'rtmp' }); cards.render(outputs.all()); } }, '+ RTMP')),
-      el('div', { class: 'small muted' }, 'A browser receiver is any device that opens the receiver link (receive.html). WHIP sends to any WebRTC ingest server that implements RFC 9725. RTMP (YouTube, Twitch, Facebook and most platforms) goes through the helper on this computer.')),
+      el('button', { class: 'btn sm', onclick: () => { outputs.add({ kind: 'twitch' }); cards.render(outputs.all()); } }, '+ Twitch')),
+      el('div', { class: 'small muted' }, 'A browser receiver is any device that opens the receiver link (receive.html). WHIP sends to any WebRTC ingest server that implements RFC 9725. Several outputs can run at once.')),
     el('div', { class: 'section-title' }, 'Outputs'), list);
 
   const cards = new CardList(list, (o) => {
-    const live = !!(o.pc || o.rtmp);
-    const kindLabel = o.cfg.kind === 'twitch' ? 'Twitch (WHIP)' : o.cfg.kind === 'whip' ? 'WHIP' : o.cfg.kind === 'rtmp' ? 'RTMP via helper' : `Browser receiver · ${o.cfg.mode === 'relay' ? 'relay' : 'copy-paste'}`;
+    const live = !!o.pc;
+    const kindLabel = o.cfg.kind === 'twitch' ? 'Twitch (WHIP)' : o.cfg.kind === 'whip' ? 'WHIP' : 'Browser receiver';
     const head = el('div', { class: 'card-head' }, el('span', { class: `dot ${o.state}` }), el('span', { class: 'card-title' }, o.cfg.name),
       o.state === 'live' ? el('span', { class: 'tchip pgm' }, 'ON AIR') : null);
     const state = el('div', { class: 'card-state' }, `${OUTPUT_STATES[o.state] || o.state} · ${kindLabel}`);
@@ -62,54 +59,28 @@ export function mountOutputsTab(app, root, setBadge) {
 
     const bitrate = field('Max video bitrate (kb/s)', num(o.cfg.maxKbps, (v) => outputs.update(o.id, { maxKbps: Math.max(200, Math.min(o.cfg.kind === 'twitch' ? TWITCH.maxKbps : 50000, v)) }), { min: 200, step: 100 }),
       o.cfg.kind === 'twitch' ? `Twitch guidance is up to 6000 kb/s; values up to ${TWITCH.maxKbps} are allowed here. Applies live.`
-        : `Suggested for ${fmt.height}p: ${defaultKbps(fmt.height)} kb/s. ${o.cfg.kind === 'rtmp' ? 'Applies on next start.' : 'Applies live.'}`);
+        : `Suggested for ${fmt.height}p: ${defaultKbps(fmt.height)} kb/s. Applies live.`);
 
     if (o.cfg.kind === 'peer') {
-      if (o.cfg.mode === 'manual') {
-        if (o.state === 'invited' && o.invite) {
-          const ta = el('textarea', { rows: 3, placeholder: 'Paste the reply code from the receiver page' });
-          ta.value = drafts.get(o.id) || '';
-          ta.addEventListener('input', () => drafts.set(o.id, ta.value));
-          const accept = el('button', { class: 'btn primary', onclick: async () => {
-            try { await outputs.acceptAnswer(o.id, ta.value); drafts.delete(o.id); } catch (e) { o.detail = e.message; }
-            cards.refresh(o);
-          } }, 'Connect');
-          ta.addEventListener('paste', () => setTimeout(() => accept.click(), 50));
-          parts.push(el('div', { class: 'small muted' }, '1. Open this link on the receiving device:'), linkBox(o.invite.link, 'Copy link'),
-            el('div', { class: 'small muted' }, '2. Paste the reply code it shows:'), ta, el('div', { class: 'btn-row' }, accept, el('button', { class: 'btn', onclick: () => outputs.stop(o.id) }, 'Cancel')));
-        } else {
-          parts.push(el('div', { class: 'btn-row' },
-            el('button', { class: 'btn primary', onclick: () => outputs.start(o.id) }, live ? 'Reconnect (new invite)' : 'Start (create invite)'),
-            live ? el('button', { class: 'btn danger', onclick: () => outputs.stop(o.id) }, 'Stop') : null));
-        }
+      if (o.state === 'invited' && o.invite) {
+        const ta = el('textarea', { rows: 3, placeholder: 'Paste the reply code from the receiver page' });
+        ta.value = drafts.get(o.id) || '';
+        ta.addEventListener('input', () => drafts.set(o.id, ta.value));
+        const accept = el('button', { class: 'btn primary', onclick: async () => {
+          try { await outputs.acceptAnswer(o.id, ta.value); drafts.delete(o.id); } catch (e) { o.detail = e.message; }
+          cards.refresh(o);
+        } }, 'Connect');
+        ta.addEventListener('paste', () => setTimeout(() => accept.click(), 50));
+        parts.push(el('div', { class: 'small muted' }, '1. Open this link on the receiving device:'), linkBox(o.invite.link, 'Copy link'),
+          el('div', { class: 'small muted' }, '2. Paste the reply code it shows:'), ta, el('div', { class: 'btn-row' }, accept, el('button', { class: 'btn', onclick: () => outputs.stop(o.id) }, 'Cancel')));
       } else {
-        parts.push(el('div', { class: 'small muted' }, 'Receiver link (reusable):'), linkBox(outputs.relayLink(o.id), 'Copy link'),
-          el('div', { class: 'btn-row' },
-            el('button', { class: 'btn primary', onclick: () => outputs.start(o.id) }, ['idle', 'stopped'].includes(o.state) ? 'Start' : 'Reconnect'),
-            o.state !== 'idle' && o.state !== 'stopped' ? el('button', { class: 'btn danger', onclick: () => outputs.stop(o.id) }, 'Stop') : null));
+        parts.push(el('div', { class: 'btn-row' },
+          el('button', { class: 'btn primary', onclick: () => outputs.start(o.id) }, live ? 'Reconnect (new invite)' : 'Start (create invite)'),
+          live ? el('button', { class: 'btn danger', onclick: () => outputs.stop(o.id) }, 'Stop') : null));
       }
       parts.push(el('details', {}, el('summary', {}, 'Output settings'), el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
         field('Name', text(o.cfg.name, (v) => outputs.update(o.id, { name: v }))), bitrate,
         field('Video codec', select(CODECS, o.cfg.codec, (v) => outputs.update(o.id, { codec: v })), 'Applies on next start.'),
-        relayWorksRemotely(store.ws.settings.signalingUrl) ? field('Signaling', select({ manual: 'Copy-paste codes', relay: 'Signaling relay' }, o.cfg.mode, (v) => { outputs.stop(o.id, true); outputs.update(o.id, { mode: v }); cards.refresh(o); })) : null,
-        removeBtn(o))));
-      return el('div', { class: `card ${o.state === 'live' ? 'live' : o.state === 'failed' ? 'failed' : ''}` }, ...parts);
-    }
-
-    if (o.cfg.kind === 'rtmp') {
-      parts.push(...rtmpHelperNotes());
-      const url = text(o.cfg.url, (v) => outputs.update(o.id, { url: v.trim() }, { silent: true }), { placeholder: 'rtmp://live.twitch.tv/app' });
-      const keyIn = el('input', { ...SECRET, value: o.token || '', placeholder: 'Stream key', autocomplete: 'off' });
-      keyIn.addEventListener('change', () => { o.token = keyIn.value.trim(); });
-      parts.push(field('Server URL', url, 'From the platform\'s stream settings, e.g. rtmp://a.rtmp.youtube.com/live2 or rtmp://live.twitch.tv/app. rtmps:// works too.'),
-        field('Stream key', keyIn), secretControls(o, keyIn));
-      parts.push(el('div', { class: 'btn-row' },
-        el('button', { class: `btn ${live ? '' : 'live'}`, onclick: () => { o.token = keyIn.value.trim(); outputs.start(o.id); } }, live ? 'Restart' : 'Start broadcast'),
-        live || o.state === 'failed' ? el('button', { class: 'btn danger', onclick: () => outputs.stop(o.id) }, 'Stop broadcast') : null));
-      parts.push(el('details', {}, el('summary', {}, 'Output settings'), el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-        field('Name', text(o.cfg.name, (v) => outputs.update(o.id, { name: v }))), bitrate,
-        el('div', { class: 'small muted' }, 'Video: H.264, keyframe every 2 s. Audio: AAC 160 kb/s. Expect 1 to 3 s more delay than the WebRTC outputs.'),
-        check('Reconnect automatically after failures', o.cfg.autoReconnect, (v) => outputs.update(o.id, { autoReconnect: v })),
         removeBtn(o))));
       return el('div', { class: `card ${o.state === 'live' ? 'live' : o.state === 'failed' ? 'failed' : ''}` }, ...parts);
     }
@@ -118,7 +89,7 @@ export function mountOutputsTab(app, root, setBadge) {
     const twitch = o.cfg.kind === 'twitch';
     if (twitch) {
       parts.push(el('div', { class: 'note warn' },
-        'Unverified integration. Twitch\'s official developer documentation describes RTMP ingest only and does not document WHIP. ',
+        'Unverified integration. Twitch\'s official developer documentation does not document WHIP ingest. ',
         'This output uses the WebRTC endpoint Twitch announced in 2023 (also used by OBS), with your stream key as the Bearer token, H.264 video and Opus audio. ',
         'If Twitch has changed or withdrawn that endpoint, or blocks browser requests (CORS), the error below says so.'));
       const probs = outputs.formatProblems(o);
@@ -140,31 +111,6 @@ export function mountOutputsTab(app, root, setBadge) {
       removeBtn(o))));
     return el('div', { class: `card ${o.state === 'live' ? 'live' : o.state === 'failed' ? 'failed' : ''}` }, ...parts);
   });
-
-  // What the RTMP card needs from the helper on this computer.
-  function rtmpHelperNotes() {
-    const info = app.helperInfo;
-    const fmtOk = rtmpFormat();
-    const notes = [];
-    if (!fmtOk) notes.push(el('div', { class: 'note warn' }, 'This browser cannot record the programme for RTMP. Use a current Chrome or Edge.'));
-    else if (fmtOk.codec !== 'h264') notes.push(el('div', { class: 'note warn' }, 'This browser cannot record H.264, so the helper re-encodes the video, which uses more CPU. Chrome or Edge avoid that.'));
-    const checkBtn = el('button', { class: 'btn', onclick: async (e) => {
-      e.target.textContent = 'Looking…';
-      if (!(await app.detectHelper())) e.target.textContent = 'Not found. Check again';
-    } }, 'Check again');
-    const install = el('button', { class: 'btn primary', onclick: downloadHelperInstaller }, 'Install helper (Windows)');
-    if (!info) {
-      notes.push(el('div', { class: 'note warn' }, 'A web page can\'t send RTMP by itself. The helper on this computer takes the programme from this page and pushes it to the RTMP server with ffmpeg.'),
-        el('div', { class: 'btn-row' }, install, checkBtn),
-        el('div', { class: 'small muted' }, 'The setup file installs Node.js and ffmpeg if needed and runs the helper in the background. Then click Check again.'));
-    } else if (!info.features?.includes('rtmp')) {
-      notes.push(el('div', { class: 'note warn' }, info.ffmpeg === false
-        ? 'The helper is running but can\'t find ffmpeg. Run the setup file again to install it, then click Check again.'
-        : 'The helper on this computer is an older version without RTMP. Run the setup file again to update it, then click Check again.'),
-      el('div', { class: 'btn-row' }, install, checkBtn));
-    }
-    return notes;
-  }
 
   function secretControls(o, keyIn) {
     const box = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
@@ -213,14 +159,6 @@ export function mountOutputsTab(app, root, setBadge) {
   function statsFor(o) {
     const st = o.stats;
     if (!st) return '';
-    if (st.rtmp) {
-      const r = st.rtmp;
-      return statLine([
-        ['fps', r.fps !== undefined ? `${Math.round(r.fps)}/${r.fpsTarget}` : null], ['sent', r.kbps ? fmtKbps(r.kbps) : null],
-        ['to helper', fmtKbps(r.upKbps)], ['behind', `${r.backlog.toFixed(1)} s`], ['speed', r.speed ? `${r.speed.toFixed(2)}×` : null],
-        ['on air', r.time || null], ['codec', `${r.codec === 'h264' ? 'H.264' : `${r.codec.toUpperCase()} → H.264`}/AAC`],
-      ]);
-    }
     const v = st.out.video, a = st.out.audio, p = st.pair;
     return statLine([
       ['res', v ? fmtRes(v.width, v.height) : null], ['fps', v?.fps !== undefined ? Math.round(v.fps) : null],
@@ -237,7 +175,6 @@ export function mountOutputsTab(app, root, setBadge) {
   outputs.on('change', (o) => { cards.refresh(o); badge(); });
   outputs.on('removed', () => { cards.render(outputs.all()); badge(); });
   outputs.on('stats', (o) => { const slot = cards.cards.get(o.id)?.querySelector('.stats-slot'); if (slot) slot.replaceChildren(statsFor(o)); });
-  app.ui.on('settings', () => cards.render(outputs.all()));
   cards.render(outputs.all());
   badge();
 }

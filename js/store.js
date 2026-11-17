@@ -1,7 +1,7 @@
 // Workspace persistence. Configuration lives in localStorage; image assets in
 // IndexedDB. Live connections are never persisted: after a reload every
 // source and output shows as "saved, not connected" until reconnected.
-import { uid, debounce } from './util.js';
+import { debounce } from './util.js';
 import { DEFAULT_STUN } from './rtc.js';
 
 const KEY = 'webrtc-studio.workspace.v1';
@@ -11,9 +11,6 @@ export function defaultWorkspace() {
     v: 1,
     settings: {
       ice: { stun: DEFAULT_STUN, turnUrl: '', turnUser: '', turnPass: '', forceRelay: false },
-      signalingUrl: '',
-      room: uid(8),
-      whipProxy: '',
       format: { width: 1920, height: 1080, fps: 30 },
       previewFps: 20,
       defaultFit: 'cover',
@@ -44,13 +41,26 @@ function merge(def, saved) {
   return saved === undefined ? def : saved;
 }
 
+// Older workspaces could hold sources, outputs and settings that needed a
+// local helper or a signaling relay. Those are gone: drop them, and use
+// copy-paste codes for invite links and receivers.
+function migrate(ws) {
+  ws.sources = (ws.sources || []).filter((c) => c && c.kind !== 'obs' && c.kind !== 'srt');
+  ws.outputs = (ws.outputs || []).filter((c) => c && c.kind !== 'rtmp');
+  for (const c of [...ws.sources, ...ws.outputs]) if ((c.kind || 'peer') === 'peer') c.mode = 'manual';
+  const ids = new Set(ws.sources.map((c) => c.id));
+  for (const id of Object.keys(ws.audio?.channels || {})) if (!ids.has(id)) delete ws.audio.channels[id];
+  for (const k of ['signalingUrl', 'room', 'whipProxy']) delete ws.settings[k];
+  return ws;
+}
+
 export class Store {
   constructor() {
     this.loadedFromDisk = false;
     this.ws = defaultWorkspace();
     try {
       const raw = localStorage.getItem(KEY);
-      if (raw) { this.ws = merge(defaultWorkspace(), JSON.parse(raw)); this.loadedFromDisk = true; }
+      if (raw) { this.ws = migrate(merge(defaultWorkspace(), JSON.parse(raw))); this.loadedFromDisk = true; }
     } catch (e) {
       console.warn('Could not read saved workspace; starting fresh', e);
     }
@@ -79,7 +89,7 @@ export class Store {
   importJson(text) {
     const obj = JSON.parse(text);
     if (!obj || obj.v !== 1) throw new Error('Not a WebRTC Studio workspace file.');
-    localStorage.setItem(KEY, JSON.stringify(merge(defaultWorkspace(), obj)));
+    localStorage.setItem(KEY, JSON.stringify(migrate(merge(defaultWorkspace(), obj))));
   }
 
   reset() { localStorage.removeItem(KEY); }
